@@ -12,6 +12,8 @@ from googleapiclient.discovery import build
 # ==================== 기본 설정 ====================
 st.write("DEBUG st.secrets keys:", list(st.secrets.keys()))
 st.write("DEBUG redirect_uri:", st.secrets["google_oauth"]["redirect_uri"])
+st.write("DEBUG client_id prefix:", st.secrets["google_oauth"]["client_id"][:20])
+
 
 st.set_page_config(
     page_title="일정? 바로잡 GO!",
