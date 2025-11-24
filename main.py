@@ -55,6 +55,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+st.warning("🔁 코드 버전: v3-20251124-1")
 # ==================== OAuth Flow 도우미 ====================
 def make_flow() -> Flow:
     """secrets.toml에 저장된 정보로 OAuth Flow 객체 만들기"""
