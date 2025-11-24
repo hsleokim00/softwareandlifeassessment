@@ -9,20 +9,26 @@ st.set_page_config(
     layout="centered",
 )
 
-# ===== 캘린더 버튼 공통 스타일 + 오늘 날짜 노란 테두리 =====
+# ===== 캘린더 버튼 공통 스타일 + 오늘/선택 날짜 강조 =====
 st.markdown(
     """
 <style>
-/* 모든 버튼 공통(특히 캘린더 버튼) 스타일 통일 */
+/* 모든 버튼 기본 스타일 (특히 캘린더 버튼용) */
 div[data-testid="stButton"] > button {
     border-radius: 0.7rem;
     padding-top: 0.6rem;
     padding-bottom: 0.6rem;
 }
 
-/* 오늘 날짜 버튼: help="TODAY_CELL" 이 붙은 버튼만 노란 테두리 */
-button[title="TODAY_CELL"] {
-    border: 2px solid #FFD54F !important;
+/* 오늘 날짜 버튼: title 속성에 TODAY 포함 */
+button[title*="TODAY"] {
+    border: 2px solid #FFD54F !important;   /* 노란색 테두리 */
+}
+
+/* 선택된 날짜 버튼: title 속성에 SELECTED 포함 */
+button[title*="SELECTED"] {
+    background-color: #4B8DF8 !important;   /* 파란 배경 */
+    color: white !important;                /* 흰 글씨 */
 }
 </style>
 """,
@@ -64,7 +70,7 @@ def move_month(delta: int):
 
 
 def render_calendar(year: int, month: int):
-    """달력 렌더링 (월요일 시작, 모든 칸 버튼으로 정렬 깔끔하게)"""
+    """달력 렌더링 (월요일 시작, 버튼 약간 오른쪽으로 이동)"""
     st.markdown("### 📅 달력")
 
     # 상단: 좌/우 이동 + 타이틀
@@ -99,29 +105,39 @@ def render_calendar(year: int, month: int):
     cal = calendar.Calendar(firstweekday=0)
     month_weeks = cal.monthdayscalendar(year, month)
 
-    # 날짜/빈칸 모두 버튼으로 통일
+    # 날짜/빈 칸 버튼들
     for week_idx, week in enumerate(month_weeks):
         cols = st.columns(7)
         for i, day in enumerate(week):
             with cols[i]:
-                if day == 0:
-                    # 이 달에 속하지 않는 빈 칸도 버튼으로 만들어 모양 통일
-                    st.button(
-                        " ",
-                        key=f"empty_{year}_{month}_{week_idx}_{i}",
-                    )
-                else:
-                    current_date = dt.date(year, month, day)
-                    is_today = (current_date == today)
+                # 안쪽에 작은 두 칸을 만들어서 버튼을 오른쪽으로 살짝 밀기
+                # 비율 [1, 4] 정도로 → 오른쪽으로 조금 치우침
+                inner_left, inner_right = st.columns([1, 4])
+                with inner_right:
+                    if day == 0:
+                        # 이 달에 속하지 않는 칸도 버튼으로 만들어 모양 통일
+                        st.button(
+                            " ",
+                            key=f"empty_{year}_{month}_{week_idx}_{i}",
+                        )
+                    else:
+                        current_date = dt.date(year, month, day)
+                        is_today = (current_date == today)
+                        is_selected = (current_date == st.session_state.selected_date)
 
-                    help_text = "TODAY_CELL" if is_today else None
+                        tags = []
+                        if is_today:
+                            tags.append("TODAY")
+                        if is_selected:
+                            tags.append("SELECTED")
+                        help_text = ",".join(tags) if tags else None
 
-                    if st.button(
-                        f"{day}",
-                        key=f"day_{year}_{month}_{day}",
-                        help=help_text,  # 오늘인 경우에만 title="TODAY_CELL" 부여
-                    ):
-                        st.session_state.selected_date = current_date
+                        if st.button(
+                            f"{day}",
+                            key=f"day_{year}_{month}_{day}",
+                            help=help_text,  # title 속성으로 들어감 → CSS에서 잡아서 강조
+                        ):
+                            st.session_state.selected_date = current_date
 
 
 # ==================== 메인 ====================
