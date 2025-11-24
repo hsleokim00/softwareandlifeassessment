@@ -1,3 +1,5 @@
+st.write("DEBUG st.secrets keys:", list(st.secrets.keys()))
+
 import streamlit as st
 import datetime as dt
 import calendar
