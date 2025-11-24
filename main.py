@@ -123,19 +123,35 @@ def fetch_month_event_days(service, year: int, month: int):
 
 # ==================== 1. OAuth 콜백 처리 (URL의 code/state 읽기) ====================
 params = st.experimental_get_query_params()
-if "code" in params and "state" in params and not st.session_state.logged_in:
-    code = params["code"][0]
-    state = params["state"][0]
+code = params.get("code", [None])[0]
+state_from_google = params.get("state", [None])[0]
 
-    if st.session_state.oauth_state and state == st.session_state.oauth_state:
+if code and state_from_google and not st.session_state.logged_in:
+    # 우리가 로그인 요청을 보낼 때 저장해둔 state
+    local_state = st.session_state.oauth_state
+
+    if local_state is None:
+        # 세션이 리셋된 경우 (오래 두었다가 돌아온 경우 등)
+        st.error("세션이 만료되었습니다. 다시 로그인해 주세요.")
+        # 쿼리 파라미터 정리
+        st.experimental_set_query_params()
+    elif state_from_google != local_state:
+        # CSRF 보호: 우리가 보낸 state와 다르면 거부
+        st.error("OAuth state가 일치하지 않습니다. 다시 로그인해 주세요.")
+        st.experimental_set_query_params()
+    else:
+        # state 일치 → 토큰 교환
         flow = make_flow()
+        # authorization_response 대신 code만 넘겨도 되지만,
+        # state 검증은 우리가 이미 했으므로 code 기반으로 교환
         flow.fetch_token(code=code)
         st.session_state.creds = flow.credentials
         st.session_state.logged_in = True
-        # URL 깔끔하게 정리
+        # 한 번 쓰고 나면 state 초기화 (재사용 방지)
+        st.session_state.oauth_state = None
+        # URL 깨끗하게
         st.experimental_set_query_params()
-    else:
-        st.error("OAuth state가 일치하지 않습니다. 다시 로그인해 주세요.")
+
 
 # ==================== 상단: 제목 + 로그인 버튼 ====================
 top_left, top_right = st.columns([4, 1])
@@ -154,9 +170,17 @@ with top_right:
                 include_granted_scopes="true",
                 prompt="consent",
             )
+            # 이 state를 세션에 저장해두고,
+            # 현재 탭에서 바로 구글 로그인 페이지로 이동
             st.session_state.oauth_state = state
-            # 사용자가 클릭해서 구글 로그인 페이지로 이동
-            st.markdown(f"[여기를 눌러 구글 로그인 하기]({auth_url})")
+
+            # 현재 탭에서 즉시 리다이렉트 (새 탭 X → 동일 세션 유지)
+            st.markdown(
+                f"""
+                <meta http-equiv="refresh" content="0; url={auth_url}">
+                """,
+                unsafe_allow_html=True,
+            )
             st.stop()
 
 st.write("")
