@@ -162,7 +162,8 @@ def fetch_month_event_days(service, year: int, month: int):
 
 
 # ==================== 1. OAuth 콜백 처리 (code + state 검증) ====================
-params = st.experimental_get_query_params()
+# 🔁 실험용 API → 정식 API로 변경
+params = st.query_params
 code = params.get("code", [None])[0]
 state_from_google = params.get("state", [None])[0]
 
@@ -170,18 +171,20 @@ if code and state_from_google and not st.session_state.logged_in:
     # CSRF 방어: state 서명 검증
     if not verify_state(state_from_google):
         st.error("OAuth state 검증에 실패했습니다. 다시 로그인해 주세요.")
-        st.experimental_set_query_params()
+        # st.experimental_set_query_params() 대체
+        st.query_params.clear()
     else:
         try:
             flow = make_flow()
             flow.fetch_token(code=code)
             st.session_state.creds = flow.credentials
             st.session_state.logged_in = True
-            st.experimental_set_query_params()  # URL 정리
+            # URL 정리
+            st.query_params.clear()
         except Exception as e:
             st.error("구글 로그인 중 오류가 발생했습니다. 다시 시도해 주세요.")
             st.write(e)
-            st.experimental_set_query_params()
+            st.query_params.clear()
 
 # ==================== 상단: 제목 + 로그인 버튼 ====================
 top_left, top_right = st.columns([4, 1])
