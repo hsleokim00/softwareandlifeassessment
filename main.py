@@ -56,11 +56,10 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ---------------- 상단 영역: 타이틀 + 로그인 버튼 ----------------
+# ---------------- 상단: 제목 + 로그인 ----------------
 top_left, top_right = st.columns([4, 1])
 
 with top_left:
-    # 검은 바탕(스트림릿 다크테마) + 회색 글씨 느낌
     st.markdown('<div class="title-text">일정? 바로잡 GO!</div>', unsafe_allow_html=True)
 
 with top_right:
@@ -69,12 +68,12 @@ with top_right:
     else:
         login_clicked = st.button("구글로 로그인")
         if login_clicked:
-            # 나중에 여기에 실제 Google OAuth 연동 넣으면 됨
+            # 나중에 여기 Google OAuth 연동
             st.session_state.logged_in = True
 
-st.write("")  # 약간 여백
+st.write("")
 
-# ---------------- 가운데: 캘린더 박스 ----------------
+# ---------------- 가운데: 흰 상자 + 진짜 달력 ----------------
 st.markdown('<div class="calendar-box">', unsafe_allow_html=True)
 
 today = dt.date.today()
@@ -94,20 +93,19 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ✅ 실제 달력: 과거/미래 다 이동 가능
-main_selected_date = st.date_input(
+# ✅ 여기! 흰 상자 안에 들어가는, 과거/미래 다 이동 가능한 달력
+selected_date = st.date_input(
     label="",
     value=today,
     key="main_calendar",
 )
 
-st.markdown('</div>', unsafe_allow_html=True)  # calendar-box 닫기
+st.markdown('</div>', unsafe_allow_html=True)  # calendar-box 끝
 
-# ---------------- 아래: 새 일정 입력 영역 ----------------
+# ---------------- 아래: 새 일정 입력 (달력 X) ----------------
 st.markdown("#### 새 일정 입력")
 
-# 위에서 선택한 날짜를 기본값으로 사용
-date = st.date_input("날짜", value=main_selected_date, key="input_date")
+st.write(f"선택한 날짜: **{selected_date}**")  # 위 달력에서 고른 날짜 표시만
 
 c1, c2, c3, c4 = st.columns(4)
 
@@ -139,8 +137,9 @@ with btn_col:
 if clicked and logged_in:
     st.success(
         f"새 일정이 준비되었습니다: "
-        f"{date} {start_time.strftime('%H:%M')}~{end_time.strftime('%H:%M')} / {title} @ {place}"
+        f"{selected_date} {start_time.strftime('%H:%M')}~{end_time.strftime('%H:%M')} "
+        f"/ {title} @ {place}"
     )
     # TODO:
-    # 1) 여기서 기존 구글 캘린더 일정 + 이동시간 체크
-    # 2) 문제 없으면 구글 캘린더에 실제 이벤트 생성
+    # 1) 여기서 selected_date 기준으로 기존 일정 + 동선 체크
+    # 2) 문제 없으면 구글 캘린더에 이벤트 생성
