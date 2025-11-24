@@ -92,62 +92,65 @@ def render_calendar(year: int, month: int):
     cal = calendar.Calendar(firstweekday=0)
     weeks = cal.monthdayscalendar(year, month)
 
-    # 날짜 렌더링
-    for w_idx, week in enumerate(weeks):
-        cols = st.columns(7)
-        for i, day in enumerate(week):
-            with cols[i]:
-                # 날짜 버튼을 약간 오른쪽으로 밀기 위한 내부 컬럼
-                inner_left, inner_right = st.columns([1, 4])
-                with inner_right:
-                    if day == 0:
-                        # 빈 칸
-                        st.markdown("<div class='calendar-empty'></div>", unsafe_allow_html=True)
-                    else:
-                        current = dt.date(year, month, day)
-                        is_today = (current == today)
-                        is_selected = (current == st.session_state.selected_date)
+ # 날짜 렌더링
+for w_idx, week in enumerate(weeks):
+    cols = st.columns(7)
+    for i, day in enumerate(week):
+        with cols[i]:
+            if day == 0:
+                # 빈 칸
+                st.markdown("<div class='calendar-empty'></div>", unsafe_allow_html=True)
+            else:
+                current = dt.date(year, month, day)
+                is_today = (current == today)
+                is_selected = (current == st.session_state.selected_date)
 
-                        # 1) 선택된 날짜면: 파란 배경(＋ 오늘이면 노란 테두리까지)
-                        if is_selected:
-                            border = "2px solid #FFD54F" if is_today else "1px solid rgba(255,255,255,0.15)"
-                            st.markdown(
-                                f"""
+                # div 스타일 결정
+                cell_style = """
+                    width: 48px;
+                    height: 48px;
+                    border-radius: 10px;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    font-size: 1rem;
+                    margin-bottom: 4px;
+                """
+
+                # 기본 border
+                border_color = "rgba(255,255,255,0.15)"
+
+                # 오늘 강조
+                if is_today:
+                    border_color = "#FFD54F"
+
+                # 선택 강조
+                background_color = "transparent"
+                text_color = "white"
+
+                if is_selected:
+                    background_color = "#4B8DF8"
+                    text_color = "white"
+
+                # 최종 div 출력
+                st.markdown(
+                    f"""
 <div style="
-    width:48px; height:48px;
-    border-radius:10px;
-    background-color:#4B8DF8;
-    color:white;
-    border:{border};
-    display:flex;
-    align-items:center;
-    justify-content:center;
+    {cell_style}
+    border: 2px solid {border_color};
+    background-color: {background_color};
+    color: {text_color};
 ">
     {day}
 </div>
 """,
-                                unsafe_allow_html=True
-                            )
-                        # 2) 선택은 아니지만 오늘이라면: 노란 테두리만
-                        else:
-                            label = str(day)
-                            if st.button(label, key=f"day_{year}_{month}_{day}"):
-                                st.session_state.selected_date = current
-                                st.rerun()
+                    unsafe_allow_html=True
+                )
 
-                            if is_today:
-                                st.markdown(
-                                    """
-<div style="
-    width:48px; height:0;
-    border-radius:10px;
-    border:2px solid #FFD54F;
-    margin-top:-48px;
-">
-</div>
-""",
-                                    unsafe_allow_html=True
-                                )
+                # 클릭 처리용 투명 버튼 (UI와 겹치지 않음)
+                if st.button(" ", key=f"click_{year}_{month}_{day}"):
+                    st.session_state.selected_date = current
+                    st.rerun()
 
 
 # ==================== 메인 ====================
