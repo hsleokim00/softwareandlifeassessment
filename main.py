@@ -307,7 +307,7 @@ def render_calendar(year: int, month: int):
                         # st.button에 클래스를 직접 줄 수는 없어서
                         # data-testid 기반 CSS + 이 컨테이너 위치로만 사용
                         btn = st.button(
-                            "일정정" if current == st.session_state.selected_date else " ",
+                            "일정" if current == st.session_state.selected_date else " ",
                             key=f"click_{year}_{month}_{day}",
                             help=tooltip  # tooltip이 "EVENT:"로 시작하면 CSS에서 빨간 버튼 처리
                         )
