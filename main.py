@@ -23,20 +23,20 @@ st.markdown("""
 /* 메인 컨테이너: 모바일에서도 보기 좋게 최대 폭 제한 + 중앙 정렬 */
 .main .block-container {
     max-width: 900px;
-    padding-top: 1.5rem;
-    padding-bottom: 3rem;
+    padding-top: 1.2rem;
+    padding-bottom: 2.5rem;
 }
 
-/* 달력 셀: 반응형 크기 (화면 폭의 10~11% 정도, 최대 60px) */
+/* 달력 셀: 반응형 크기 (PC/모바일 모두 대응) */
 .calendar-cell {
-    width: min(11vw, 60px);
-    height: min(11vw, 60px);
+    width: min(11vw, 56px);
+    height: min(11vw, 56px);
     border-radius: 10px;
     display: flex;
     justify-content: center;
     align-items: center;
     font-size: 0.95rem;
-    margin: 0 auto 4px auto;
+    margin: 0 auto 3px auto;
     border: 1px solid rgba(255,255,255,0.15);
     background-color: transparent;
     color: white;
@@ -44,35 +44,53 @@ st.markdown("""
 
 /* 빈 칸 */
 .calendar-empty {
-    width: min(11vw, 60px);
-    height: min(11vw, 60px);
+    width: min(11vw, 56px);
+    height: min(11vw, 56px);
     border-radius: 10px;
     background-color: rgba(255,255,255,0.03);
-    margin: 0 auto 4px auto;
+    margin: 0 auto 3px auto;
 }
 
-/* 아래 클릭용 버튼: 폭을 셀에 맞추기 위해 100% */
-div[data-testid="stButton"].day-clicker > button {
-    width: 100%;
-    max-width: min(11vw, 60px);
-    padding-top: 0.25rem;
-    padding-bottom: 0.25rem;
+/* 요일 헤더 */
+.calendar-weekday {
+    text-align: center;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+
+/* 아래 클릭용 버튼: 폭을 셀에 맞추기 위해 100% + 작게 */
+div[data-testid="stButton"] > button {
+    padding-top: 0.2rem;
+    padding-bottom: 0.2rem;
     border-radius: 999px;
-    font-size: 0.7rem;
+    font-size: 0.65rem;
 }
 
 /* 일정이 있는 날짜의 아래 버튼 (help/title이 EVENT: 로 시작) */
-div[data-testid="stButton"].day-clicker > button[title^="EVENT:"] {
+div[data-testid="stButton"] > button[title^="EVENT:"] {
     background-color: #ff5252 !important;
     border-color: #ff8a80 !important;
     color: white !important;
 }
 
-/* 요일 헤더 줄 간격 조금 줄이기 */
-.calendar-weekday {
-    text-align: center;
-    font-weight: 600;
-    margin-bottom: 0.3rem;
+/* 모바일에서 세로 길이 줄이기: 셀 크기/여백 축소 */
+@media (max-width: 600px) {
+    .main .block-container {
+        max-width: 100%;
+        padding-left: 0.6rem;
+        padding-right: 0.6rem;
+    }
+    .calendar-cell, .calendar-empty {
+        width: min(12vw, 48px);
+        height: min(12vw, 48px);
+        margin-bottom: 2px;
+        font-size: 0.85rem;
+    }
+    div[data-testid="stButton"] > button {
+        font-size: 0.6rem;
+        padding-top: 0.15rem;
+        padding-bottom: 0.15rem;
+    }
 }
 </style>
 """, unsafe_allow_html=True)
@@ -100,10 +118,7 @@ if "local_events" not in st.session_state:
 # ==================== 구글 캘린더 & 맵 연동용 함수들 ====================
 
 def fetch_google_events(creds, date: dt.date) -> List[Dict]:
-    """
-    주어진 날짜(date)에 해당하는 구글 캘린더 일정 목록 반환.
-    creds가 None 이거나 google 모듈 없으면 [].
-    """
+    """주어진 날짜(date)에 해당하는 구글 캘린더 일정 목록 반환."""
     if creds is None or build is None:
         return []
 
@@ -251,7 +266,6 @@ def render_calendar(year: int, month: int):
             with cols[i]:
                 if day == 0:
                     st.markdown("<div class='calendar-empty'></div>", unsafe_allow_html=True)
-                    # 아래 버튼도 없애고 싶으면 여기는 패스
                 else:
                     current = dt.date(year, month, day)
                     is_today = (current == today)
@@ -268,7 +282,7 @@ def render_calendar(year: int, month: int):
                         bg_color = "#4B8DF8"       # 선택 파란 배경
                         text_color = "white"
                         if is_today:
-                            border_color = "#FFD54F"  # 오늘+선택 → 노란 테두리 유지
+                            border_color = "#FFD54F"
 
                     st.markdown(
                         f"""
@@ -282,13 +296,13 @@ def render_calendar(year: int, month: int):
                         unsafe_allow_html=True,
                     )
 
-                    # 해당 날짜에 등록된 로컬 일정들
+                    # 해당 날짜의 로컬 일정들
                     local_for_day = [
                         ev for ev in st.session_state.local_events
                         if ev["start_dt"].date() == current
                     ]
 
-                    # 툴팁용 텍스트
+                    # 툴팁 텍스트 (hover 시 브라우저 기본 툴팁)
                     tooltip = None
                     if local_for_day:
                         parts = []
@@ -301,21 +315,13 @@ def render_calendar(year: int, month: int):
                         tooltip = "EVENT: " + " | ".join(parts)
 
                     # 아래 클릭용 버튼 (날짜 선택 기능 + 일정 있으면 빨간색 + 툴팁)
-                    # div[data-testid="stButton"].day-clicker 로 잡기 위해 컨테이너에 class 추가
-                    click_container = st.container()
-                    with click_container:
-                        # st.button에 클래스를 직접 줄 수는 없어서
-                        # data-testid 기반 CSS + 이 컨테이너 위치로만 사용
-                        btn = st.button(
-                            "일정" if current == st.session_state.selected_date else " ",
-                            key=f"click_{year}_{month}_{day}",
-                            help=tooltip  # tooltip이 "EVENT:"로 시작하면 CSS에서 빨간 버튼 처리
-                        )
-                    # 컨테이너에 클래스 주는 건 안 되지만,
-                    # 위쪽 CSS에서 div[data-testid="stButton"].day-clicker 를 쓸 수 없어서
-                    # st.button 주위에 바로 classname 주는 건 불가 → 대신 전체 stButton 폭 제한으로 대응
+                    clicked = st.button(
+                        "선택" if current == st.session_state.selected_date else " ",
+                        key=f"click_{year}_{month}_{day}",
+                        help=tooltip  # title 속성으로 들어감
+                    )
 
-                    if btn:
+                    if clicked:
                         st.session_state.selected_date = current
                         st.rerun()
 
@@ -438,7 +444,6 @@ if submitted:
         }
         st.session_state.local_events.append(new_event)
         st.success("일정이 추가되었습니다.")
-
 
 # ==================== 선택된 날짜의 일정 목록 표시 ====================
 
