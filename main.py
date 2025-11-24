@@ -1,5 +1,3 @@
-st.write("DEBUG st.secrets keys:", list(st.secrets.keys()))
-
 import streamlit as st
 import datetime as dt
 import calendar
@@ -12,6 +10,8 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 
 # ==================== 기본 설정 ====================
+st.write("DEBUG st.secrets keys:", list(st.secrets.keys()))
+
 st.set_page_config(
     page_title="일정? 바로잡 GO!",
     page_icon="📅",
