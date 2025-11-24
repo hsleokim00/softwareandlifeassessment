@@ -2,18 +2,8 @@ import streamlit as st
 import datetime as dt
 import calendar
 
-# ==== (1) 구글 캘린더용 라이브러리 ====
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
-
-# 구글 캘린더에서 읽기/쓰기 권한 (필요한 범위만 사용)
-SCOPES = [
-    "https://www.googleapis.com/auth/calendar.readonly",
-    # 일정 생성까지 할 거면 아래 주석 해제
-    # "https://www.googleapis.com/auth/calendar.events"
-]
-
 
 # ==================== 기본 설정 ====================
 st.set_page_config(
@@ -22,23 +12,23 @@ st.set_page_config(
     layout="centered",
 )
 
+SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
-# ==================== 세션 상태 ====================
 today = dt.date.today()
 
-if "google_service" not in st.session_state:
-    st.session_state.google_service = None  # 구글 캘린더 서비스 핸들
+# 세션 상태 초기화
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
-
-# 달력용 상태
+if "creds" not in st.session_state:
+    st.session_state.creds = None
 if "cal_year" not in st.session_state:
     st.session_state.cal_year = today.year
 if "cal_month" not in st.session_state:
     st.session_state.cal_month = today.month
 if "selected_date" not in st.session_state:
     st.session_state.selected_date = today
-
+if "oauth_state" not in st.session_state:
+    st.session_state.oauth_state = None
 
 # ==================== 스타일 ====================
 st.markdown(
@@ -64,52 +54,34 @@ st.markdown(
 )
 
 
-# ==================== 구글 캘린더 연동 함수 ====================
-def get_google_service():
-    """
-    credentials.json / token.json 을 사용해서
-    구글 캘린더 service 객체를 생성.
-    - 실제 서비스에서는 OAuth redirect URL 등을 따로 설정해야 함.
-    - 수행평가용/로컬 테스트용 구조라고 보면 됨.
-    """
-    creds = None
+# ==================== OAuth Flow 도우미 ====================
+def make_flow() -> Flow:
+    """secrets.toml에 저장된 정보로 OAuth Flow 객체 만들기"""
+    cfg = {
+        "web": {
+            "client_id": st.secrets["google_oauth"]["client_id"],
+            "client_secret": st.secrets["google_oauth"]["client_secret"],
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "redirect_uris": [st.secrets["google_oauth"]["redirect_uri"]],
+        }
+    }
+    flow = Flow.from_client_config(cfg, scopes=SCOPES)
+    flow.redirect_uri = st.secrets["google_oauth"]["redirect_uri"]
+    return flow
 
-    # 1) token.json이 있으면 거기서 토큰 로드
-    try:
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-    except Exception:
-        creds = None
 
-    # 2) 없거나 만료됐으면 새로 인증
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            # 새로고침
-            try:
-                creds.refresh_request  # type: ignore[attr-defined]
-            except Exception:
-                pass
-        else:
-            # 여기서 InstalledAppFlow를 사용해서 로컬/서버에서 OAuth 수행
-            # Streamlit Cloud에서는 이 부분을 환경에 맞게 조정해야 할 수 있음
-            flow = InstalledAppFlow.from_client_secrets_file(
-                "credentials.json", SCOPES
-            )
-            # 로컬에서 돌린다면 아래처럼 사용 (브라우저 열림)
-            creds = flow.run_local_server(port=0)
-
-        # 3) 새 토큰 저장 (다음 실행 시 사용)
-        with open("token.json", "w", encoding="utf-8") as token:
-            token.write(creds.to_json())
-
-    service = build("calendar", "v3", credentials=creds)
-    return service
+def get_calendar_service():
+    if st.session_state.creds is None:
+        return None
+    return build("calendar", "v3", credentials=st.session_state.creds)
 
 
 def fetch_month_event_days(service, year: int, month: int):
-    """
-    해당 연/월에 일정이 있는 '날짜(day 숫자)'들의 집합 반환.
-    달력에 점(•) 표시하는 용도.
-    """
+    """주어진 연/월에 '일정이 있는 날짜(day 숫자)' 집합 반환"""
+    if service is None:
+        return set()
+
     from datetime import datetime, timezone
 
     start = dt.date(year, month, 1)
@@ -118,8 +90,8 @@ def fetch_month_event_days(service, year: int, month: int):
     else:
         end = dt.date(year, month + 1, 1)
 
-    time_min = datetime.combine(start, dt.time(0, 0, 0), tzinfo=timezone.utc).isoformat()
-    time_max = datetime.combine(end, dt.time(0, 0, 0), tzinfo=timezone.utc).isoformat()
+    time_min = datetime.combine(start, dt.time(0, 0), tzinfo=timezone.utc).isoformat()
+    time_max = datetime.combine(end, dt.time(0, 0), tzinfo=timezone.utc).isoformat()
 
     events_result = (
         service.events()
@@ -134,61 +106,70 @@ def fetch_month_event_days(service, year: int, month: int):
     )
 
     items = events_result.get("items", [])
-    days_with_events = set()
-
+    days = set()
     for event in items:
         start_info = event.get("start", {})
-        # 종일 일정은 'date', 일반 일정은 'dateTime'
         date_str = start_info.get("date") or start_info.get("dateTime")
         if not date_str:
             continue
-        # "2025-11-24" or "2025-11-24T10:00:00+09:00" 형태 → 앞의 날짜 부분만 사용
         date_only = date_str[:10]
         try:
             y, m, d = map(int, date_only.split("-"))
-            days_with_events.add(d)
+            days.add(d)
         except Exception:
             continue
+    return days
 
-    return days_with_events
 
+# ==================== 1. OAuth 콜백 처리 (URL의 code/state 읽기) ====================
+params = st.experimental_get_query_params()
+if "code" in params and "state" in params and not st.session_state.logged_in:
+    code = params["code"][0]
+    state = params["state"][0]
 
-# ==================== 상단: 제목 + 로그인 ====================
+    if st.session_state.oauth_state and state == st.session_state.oauth_state:
+        flow = make_flow()
+        flow.fetch_token(code=code)
+        st.session_state.creds = flow.credentials
+        st.session_state.logged_in = True
+        # URL 깔끔하게 정리
+        st.experimental_set_query_params()
+    else:
+        st.error("OAuth state가 일치하지 않습니다. 다시 로그인해 주세요.")
+
+# ==================== 상단: 제목 + 로그인 버튼 ====================
 top_left, top_right = st.columns([4, 1])
 
 with top_left:
     st.markdown('<div class="title-text">일정? 바로잡 GO!</div>', unsafe_allow_html=True)
 
 with top_right:
-    if st.session_state.google_service is not None:
-        st.session_state.logged_in = True
-
     if st.session_state.logged_in:
         st.success("구글 로그인 완료 ✅")
     else:
-        login_clicked = st.button("구글로 로그인")
-        if login_clicked:
-            try:
-                service = get_google_service()
-                st.session_state.google_service = service
-                st.session_state.logged_in = True
-                st.success("구글 로그인 완료 ✅")
-            except Exception as e:
-                st.error(
-                    "구글 캘린더 연동에 실패했습니다. "
-                    "credentials.json / token.json 파일이 있는지 확인하세요."
-                )
-                st.write(e)
+        if st.button("구글로 로그인"):
+            flow = make_flow()
+            auth_url, state = flow.authorization_url(
+                access_type="offline",
+                include_granted_scopes="true",
+                prompt="consent",
+            )
+            st.session_state.oauth_state = state
+            # 사용자가 클릭해서 구글 로그인 페이지로 이동
+            st.markdown(f"[여기를 눌러 구글 로그인 하기]({auth_url})")
+            st.stop()
 
 st.write("")
 
-# ==================== 가운데: 항상 펼쳐진 달력 + 구글 일정 점 표시 ====================
+service = get_calendar_service() if st.session_state.logged_in else None
+
+# ==================== 가운데: 항상 펼쳐진 달력 ====================
 st.subheader("캘린더")
 
 if not st.session_state.logged_in:
     st.caption("구글 로그인 전에는 날짜만 선택 가능한 일반적인 캘린더입니다.")
 else:
-    st.caption("구글 캘린더와 연동된 일정이 있는 날에는 ● 표시가 나타납니다.")
+    st.caption("구글 캘린더에 일정이 있는 날에는 ● 점이 표시됩니다.")
 
 year = st.session_state.cal_year
 month = st.session_state.cal_month
@@ -215,20 +196,12 @@ with cal_top_right:
         else:
             st.session_state.cal_month += 1
 
-# 버튼으로 인해 값이 바뀌었을 수 있으니 다시 읽기
+# 업데이트된 값 다시 읽기
 year = st.session_state.cal_year
 month = st.session_state.cal_month
 
-# ---- 이 달의 구글 일정 있는 날짜 집합 구하기 ----
-days_with_events = set()
-if st.session_state.logged_in and st.session_state.google_service is not None:
-    try:
-        days_with_events = fetch_month_event_days(
-            st.session_state.google_service, year, month
-        )
-    except Exception as e:
-        st.warning("구글 일정 정보를 가져오는 데 문제가 발생했습니다.")
-        st.write(e)
+# 이 달의 일정 있는 날짜들
+days_with_events = fetch_month_event_days(service, year, month) if service else set()
 
 # ---- 요일 헤더 ----
 weekday_cols = st.columns(7)
@@ -237,8 +210,8 @@ for i, wd in enumerate(weekdays):
     with weekday_cols[i]:
         st.markdown(f"**{wd}**")
 
-# ---- 달력 그리드 (항상 펼쳐진 형태) ----
-cal = calendar.Calendar(firstweekday=6)  # 6: 일요일부터
+# ---- 달력 그리드 ----
+cal = calendar.Calendar(firstweekday=6)  # 6=일요일
 weeks = cal.monthdayscalendar(year, month)
 
 for week in weeks:
@@ -246,19 +219,14 @@ for week in weeks:
     for i, day in enumerate(week):
         with cols[i]:
             if day == 0:
-                st.write("")  # 빈 칸
+                st.write("")
             else:
                 date_obj = dt.date(year, month, day)
                 selected_date = st.session_state.selected_date
 
-                # 기본 라벨: 날짜 숫자
                 label = f"{day}"
-
-                # 선택된 날짜면 []로 감싸서 강조
                 if date_obj == selected_date:
                     label = f"[{label}]"
-
-                # 구글 캘린더에 일정이 있으면 ● 점 추가
                 if day in days_with_events:
                     label = f"{label} ●"
 
@@ -306,7 +274,4 @@ if clicked and st.session_state.logged_in:
         f"{selected_date} {start_time.strftime('%H:%M')}~{end_time.strftime('%H:%M')} "
         f"/ {title} @ {place}"
     )
-    # TODO:
-    # 여기에서:
-    # 1) selected_date 주변 기존 일정 + 교통/동선 체크
-    # 2) 이상 없으면 service.events().insert(...)로 구글 캘린더에 일정 생성
+    # TODO: 여기서 기존 일정 + 교통/동선 체크 → OK면 캘린더에 insert
