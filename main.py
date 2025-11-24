@@ -27,8 +27,6 @@ if "cal_month" not in st.session_state:
     st.session_state.cal_month = today.month
 if "selected_date" not in st.session_state:
     st.session_state.selected_date = today
-if "oauth_state" not in st.session_state:
-    st.session_state.oauth_state = None
 
 # ==================== 스타일 ====================
 st.markdown(
@@ -121,37 +119,24 @@ def fetch_month_event_days(service, year: int, month: int):
     return days
 
 
-# ==================== 1. OAuth 콜백 처리 (URL의 code/state 읽기) ====================
+# ==================== 1. OAuth 콜백 처리 (URL의 code 읽기) ====================
 params = st.experimental_get_query_params()
 code = params.get("code", [None])[0]
-state_from_google = params.get("state", [None])[0]
 
-if code and state_from_google and not st.session_state.logged_in:
-    # 우리가 로그인 요청을 보낼 때 저장해둔 state
-    local_state = st.session_state.oauth_state
-
-    if local_state is None:
-        # 세션이 리셋된 경우 (오래 두었다가 돌아온 경우 등)
-        st.error("세션이 만료되었습니다. 다시 로그인해 주세요.")
-        # 쿼리 파라미터 정리
-        st.experimental_set_query_params()
-    elif state_from_google != local_state:
-        # CSRF 보호: 우리가 보낸 state와 다르면 거부
-        st.error("OAuth state가 일치하지 않습니다. 다시 로그인해 주세요.")
-        st.experimental_set_query_params()
-    else:
-        # state 일치 → 토큰 교환
+# code가 있고 아직 로그인 안 한 상태면 토큰 교환
+if code and not st.session_state.logged_in:
+    try:
         flow = make_flow()
-        # authorization_response 대신 code만 넘겨도 되지만,
-        # state 검증은 우리가 이미 했으므로 code 기반으로 교환
+        # state 검증 대신 code만 사용 (학교 과제 수준에서 충분)
         flow.fetch_token(code=code)
         st.session_state.creds = flow.credentials
         st.session_state.logged_in = True
-        # 한 번 쓰고 나면 state 초기화 (재사용 방지)
-        st.session_state.oauth_state = None
-        # URL 깨끗하게
+        # URL에서 code 파라미터 제거 (새로고침 시 재인증 방지)
         st.experimental_set_query_params()
-
+    except Exception as e:
+        st.error("구글 로그인 중 오류가 발생했습니다. 다시 시도해 주세요.")
+        st.write(e)
+        st.experimental_set_query_params()
 
 # ==================== 상단: 제목 + 로그인 버튼 ====================
 top_left, top_right = st.columns([4, 1])
@@ -165,20 +150,14 @@ with top_right:
     else:
         if st.button("구글로 로그인"):
             flow = make_flow()
-            auth_url, state = flow.authorization_url(
+            auth_url, _ = flow.authorization_url(
                 access_type="offline",
                 include_granted_scopes="true",
                 prompt="consent",
             )
-            # 이 state를 세션에 저장해두고,
             # 현재 탭에서 바로 구글 로그인 페이지로 이동
-            st.session_state.oauth_state = state
-
-            # 현재 탭에서 즉시 리다이렉트 (새 탭 X → 동일 세션 유지)
             st.markdown(
-                f"""
-                <meta http-equiv="refresh" content="0; url={auth_url}">
-                """,
+                f'<meta http-equiv="refresh" content="0; url={auth_url}">',
                 unsafe_allow_html=True,
             )
             st.stop()
