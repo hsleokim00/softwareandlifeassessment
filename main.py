@@ -9,6 +9,26 @@ st.set_page_config(
     layout="centered",
 )
 
+# ===== 캘린더 버튼 공통 스타일 + 오늘 날짜 노란 테두리 =====
+st.markdown(
+    """
+<style>
+/* 모든 버튼 공통(특히 캘린더 버튼) 스타일 통일 */
+div[data-testid="stButton"] > button {
+    border-radius: 0.7rem;
+    padding-top: 0.6rem;
+    padding-bottom: 0.6rem;
+}
+
+/* 오늘 날짜 버튼: help="TODAY_CELL" 이 붙은 버튼만 노란 테두리 */
+button[title="TODAY_CELL"] {
+    border: 2px solid #FFD54F !important;
+}
+</style>
+""",
+    unsafe_allow_html=True,
+)
+
 # ==================== KST(한국 시간) 기준 현재 시각/오늘 날짜 ====================
 KST = dt.timezone(dt.timedelta(hours=9))  # UTC+9
 now = dt.datetime.now(KST)
@@ -44,10 +64,10 @@ def move_month(delta: int):
 
 
 def render_calendar(year: int, month: int):
-    """달력 렌더링 (월요일 시작, 격자 맞춤)"""
+    """달력 렌더링 (월요일 시작, 모든 칸 버튼으로 정렬 깔끔하게)"""
     st.markdown("### 📅 달력")
 
-    # 달력 상단: 연도/월 제목 + 좌우 이동
+    # 상단: 좌/우 이동 + 타이틀
     col_prev, col_title, col_next = st.columns([1, 3, 1])
     with col_prev:
         if st.button("◀", key=f"prev_{year}_{month}"):
@@ -79,47 +99,34 @@ def render_calendar(year: int, month: int):
     cal = calendar.Calendar(firstweekday=0)
     month_weeks = cal.monthdayscalendar(year, month)
 
-    # 날짜 격자
-    for week in month_weeks:
+    # 날짜/빈칸 모두 버튼으로 통일
+    for week_idx, week in enumerate(month_weeks):
         cols = st.columns(7)
         for i, day in enumerate(week):
             with cols[i]:
                 if day == 0:
-                    # 이 달에 속하지 않는 칸도 같은 크기의 박스로 채워서 '선' 맞추기
-                    st.markdown(
-                        "<div style='padding:0.6rem 0; border-radius:0.7rem;"
-                        "border:1px solid rgba(255,255,255,0.06);'></div>",
-                        unsafe_allow_html=True,
+                    # 이 달에 속하지 않는 빈 칸도 버튼으로 만들어 모양 통일
+                    st.button(
+                        " ",
+                        key=f"empty_{year}_{month}_{week_idx}_{i}",
                     )
                 else:
                     current_date = dt.date(year, month, day)
                     is_today = (current_date == today)
-                    is_selected = (current_date == st.session_state.selected_date)
 
-                    # 버튼 라벨
-                    label = f"{day}"
+                    help_text = "TODAY_CELL" if is_today else None
 
-                    # 버튼 그리기 (테마에 맞게 기본 스타일 사용)
-                    if st.button(label, key=f"day_{year}_{month}_{day}"):
+                    if st.button(
+                        f"{day}",
+                        key=f"day_{year}_{month}_{day}",
+                        help=help_text,  # 오늘인 경우에만 title="TODAY_CELL" 부여
+                    ):
                         st.session_state.selected_date = current_date
-
-                    # 선택/오늘 표시용 보조 텍스트 (원하면 지워도 됨)
-                    if is_selected:
-                        st.markdown(
-                            "<div style='text-align:center; font-size:0.7rem;'>선택</div>",
-                            unsafe_allow_html=True,
-                        )
-                    elif is_today:
-                        st.markdown(
-                            "<div style='text-align:center; font-size:0.7rem;'>오늘</div>",
-                            unsafe_allow_html=True,
-                        )
 
 
 # ==================== 메인 ====================
 st.title("일정? 바로잡 GO!")
 
-# 현재 시간 표시 (디버깅/확인용)
 st.caption(f"현재 시각 (KST 기준): {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # -------- 연/월/일 드롭다운으로 날짜 바로 이동 --------
@@ -127,7 +134,6 @@ st.markdown("### 날짜 선택")
 
 col_y, col_m, col_d = st.columns(3)
 
-# 연도 범위는 오늘 기준 ±5년 정도로 설정 (원하면 바꿀 수 있음)
 year_options = list(range(today.year - 5, today.year + 6))
 current_year = st.session_state.cal_year
 current_month = st.session_state.cal_month
@@ -147,11 +153,8 @@ with col_m:
         index=current_month - 1,
     )
 
-# 선택된 연/월에 맞는 일 수 계산
 days_in_month = calendar.monthrange(year_sel, month_sel)[1]
 
-# 현재 선택된 날짜의 일(day)을 기본값으로 쓰되,
-# 해당 월에 없는 날짜(예: 31일 → 30일/28일)는 1일로 보정
 default_day = 1
 if (
     isinstance(current_sel, dt.date)
