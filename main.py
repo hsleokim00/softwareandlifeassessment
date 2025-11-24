@@ -1,6 +1,10 @@
 import streamlit as st
 import datetime as dt
 import calendar
+import os
+import hmac
+import hashlib
+import base64
 
 from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
@@ -51,7 +55,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
 # ==================== OAuth Flow 도우미 ====================
 def make_flow() -> Flow:
     """secrets.toml에 저장된 정보로 OAuth Flow 객체 만들기"""
@@ -73,6 +76,40 @@ def get_calendar_service():
     if st.session_state.creds is None:
         return None
     return build("calendar", "v3", credentials=st.session_state.creds)
+
+
+# ==================== CSRF용 state 생성/검증 ====================
+def generate_state() -> str:
+    """
+    서버 비밀키(state_secret)로 서명된 state 문자열 생성.
+    세션에 저장할 필요 없이, 나중에 서명만 검증하면 됨.
+    """
+    secret_key = st.secrets["google_oauth"]["state_secret"].encode("utf-8")
+    nonce = os.urandom(16)  # 랜덤 16바이트
+    sig = hmac.new(secret_key, nonce, hashlib.sha256).digest()
+    data = nonce + sig  # 총 16 + 32 = 48바이트
+    return base64.urlsafe_b64encode(data).decode("utf-8")
+
+
+def verify_state(state_str: str) -> bool:
+    """
+    구글에서 돌려준 state 문자열이 우리가 만든 것인지 검증.
+    (nonce + HMAC 서명 구조인지 확인)
+    """
+    try:
+        data = base64.urlsafe_b64decode(state_str.encode("utf-8"))
+    except Exception:
+        return False
+
+    if len(data) != 48:
+        return False
+
+    nonce = data[:16]
+    sig = data[16:]
+
+    secret_key = st.secrets["google_oauth"]["state_secret"].encode("utf-8")
+    expected_sig = hmac.new(secret_key, nonce, hashlib.sha256).digest()
+    return hmac.compare_digest(sig, expected_sig)
 
 
 def fetch_month_event_days(service, year: int, month: int):
@@ -119,24 +156,27 @@ def fetch_month_event_days(service, year: int, month: int):
     return days
 
 
-# ==================== 1. OAuth 콜백 처리 (URL의 code 읽기) ====================
+# ==================== 1. OAuth 콜백 처리 (code + state 검증) ====================
 params = st.experimental_get_query_params()
 code = params.get("code", [None])[0]
+state_from_google = params.get("state", [None])[0]
 
-# code가 있고 아직 로그인 안 한 상태면 토큰 교환
-if code and not st.session_state.logged_in:
-    try:
-        flow = make_flow()
-        # state 검증 대신 code만 사용 (학교 과제 수준에서 충분)
-        flow.fetch_token(code=code)
-        st.session_state.creds = flow.credentials
-        st.session_state.logged_in = True
-        # URL에서 code 파라미터 제거 (새로고침 시 재인증 방지)
+if code and state_from_google and not st.session_state.logged_in:
+    # CSRF 방어: state 서명 검증
+    if not verify_state(state_from_google):
+        st.error("OAuth state 검증에 실패했습니다. 다시 로그인해 주세요.")
         st.experimental_set_query_params()
-    except Exception as e:
-        st.error("구글 로그인 중 오류가 발생했습니다. 다시 시도해 주세요.")
-        st.write(e)
-        st.experimental_set_query_params()
+    else:
+        try:
+            flow = make_flow()
+            flow.fetch_token(code=code)
+            st.session_state.creds = flow.credentials
+            st.session_state.logged_in = True
+            st.experimental_set_query_params()  # URL 정리
+        except Exception as e:
+            st.error("구글 로그인 중 오류가 발생했습니다. 다시 시도해 주세요.")
+            st.write(e)
+            st.experimental_set_query_params()
 
 # ==================== 상단: 제목 + 로그인 버튼 ====================
 top_left, top_right = st.columns([4, 1])
@@ -150,10 +190,12 @@ with top_right:
     else:
         if st.button("구글로 로그인"):
             flow = make_flow()
+            state = generate_state()
             auth_url, _ = flow.authorization_url(
                 access_type="offline",
                 include_granted_scopes="true",
                 prompt="consent",
+                state=state,
             )
             # 현재 탭에서 바로 구글 로그인 페이지로 이동
             st.markdown(
