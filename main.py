@@ -73,25 +73,23 @@ div[data-testid="stButton"] > button[title^="EVENT:"] {
     color: white !important;
 }
 
-/* ✅ 모바일에서도 달력 7칸 가로 그리드 유지 */
+/* ✅ 모바일에서 달력 부분은 항상 7칸 그리드로 유지 */
 @media (max-width: 768px) {
-    /* 한 주(week)를 담는 가로 블록을 항상 가로+줄바꿈 그리드로 */
-    div[data-testid="stHorizontalBlock"] {
+    /* 달력 영역 안의 st.columns 들만 가로로 고정 */
+    .calendar-area div[data-testid="stColumns"] {
         display: flex !important;
         flex-direction: row !important;
-        flex-wrap: wrap !important;
-        gap: 0.25rem !important;
+        flex-wrap: nowrap !important;
+        gap: 0.1rem !important;
     }
 
-    /* 각 column을 7등분 그리드로 */
-    div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+    .calendar-area div[data-testid="stColumns"] > div[data-testid="column"] {
         flex: 0 0 calc(100% / 7) !important;
         max-width: calc(100% / 7) !important;
-        padding: 0.1rem !important;
+        padding: 0.05rem !important;
     }
 
-    /* 숫자 아래 버튼이 셀 폭 꽉 채우도록 */
-    div[data-testid="stHorizontalBlock"] > div[data-testid="column"] button {
+    .calendar-area div[data-testid="stColumns"] > div[data-testid="column"] button {
         width: 100% !important;
     }
 }
@@ -272,6 +270,9 @@ def render_calendar(year: int, month: int):
             move_month(1)
             st.rerun()
 
+    # ✅ 달력 전체를 calendar-area로 감싸서 CSS로만 제어
+    st.markdown('<div class="calendar-area">', unsafe_allow_html=True)
+
     # 요일 헤더
     weekdays = ["월", "화", "수", "목", "금", "토", "일"]
     cols = st.columns(7)
@@ -347,6 +348,9 @@ def render_calendar(year: int, month: int):
                     if clicked:
                         st.session_state.selected_date = current
                         st.rerun()
+
+    # calendar-area 닫기
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ==================== 메인 UI ====================
