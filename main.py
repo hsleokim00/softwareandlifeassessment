@@ -9,9 +9,16 @@ st.set_page_config(
     layout="centered",
 )
 
-# ==================== 세션 상태 초기화 ====================
-today = dt.date.today()
+# ==================== KST(한국 시간) 기준 현재 시각/오늘 날짜 ====================
+KST = dt.timezone(dt.timedelta(hours=9))  # UTC+9
+now = dt.datetime.now(KST)               # 현재 시각 (한국 기준)
+today = now.date()                       # 오늘 날짜
 
+# 디버깅/확인용 출력 (원하면 숨겨도 됨)
+st.caption(f"현재 시각 (KST 기준): {now.strftime('%Y-%m-%d %H:%M:%S')}")
+
+# ==================== 세션 상태 초기화 ====================
+# 처음 들어왔을 때는 '오늘이 속한 연/월'이 기본이 되도록 설정
 if "cal_year" not in st.session_state:
     st.session_state.cal_year = today.year
 
@@ -19,7 +26,7 @@ if "cal_month" not in st.session_state:
     st.session_state.cal_month = today.month
 
 if "selected_date" not in st.session_state:
-    st.session_state.selected_date = today
+    st.session_state.selected_date = today  # 기본 선택 날짜도 오늘
 
 
 # ==================== 헬퍼 함수들 ====================
@@ -31,7 +38,6 @@ def move_month(delta: int):
     year = st.session_state.cal_year
     month = st.session_state.cal_month
 
-    # month를 1~12 범위로 안전하게 이동
     month += delta
     if month <= 0:
         month += 12
@@ -53,20 +59,18 @@ def render_calendar(year: int, month: int):
     """
     st.markdown("### 📅 달력")
 
-    # 요일 헤더 (월~일 또는 일~토 원하는 걸로 조정 가능)
-    # 여기서는 '월'을 첫 번째 요일로 설정 (한국 스타일)
-    cal = calendar.Calendar(firstweekday=0)  # 0: 월요일, 6: 일요일 (파이썬 기본은 월요일)
-    # → 만약 일요일부터 시작하고 싶으면 firstweekday=6 으로 바꿔도 됨
+    # 달력 객체: 월요일 시작
+    cal = calendar.Calendar(firstweekday=0)  # 0: 월요일
 
     # monthdayscalendar: 해당 월을 주 단위 리스트로 반환 (0은 빈 칸)
     month_weeks = cal.monthdayscalendar(year, month)
 
-    # 헤더: 년/월 표시 + 이동 버튼
+    # ===== 상단: 년/월 + 좌우 이동 버튼 =====
     col_prev, col_title, col_next = st.columns([1, 3, 1])
     with col_prev:
-        if st.button("◀", key="prev_month"):
+        if st.button("◀", key=f"prev_{year}_{month}"):
             move_month(-1)
-            st.experimental_rerun()
+            st.rerun()
 
     with col_title:
         st.markdown(
@@ -75,11 +79,11 @@ def render_calendar(year: int, month: int):
         )
 
     with col_next:
-        if st.button("▶", key="next_month"):
+        if st.button("▶", key=f"next_{year}_{month}"):
             move_month(1)
-            st.experimental_rerun()
+            st.rerun()
 
-    # 요일 이름 표시
+    # ===== 요일 헤더 =====
     weekday_names = ["월", "화", "수", "목", "금", "토", "일"]
     cols = st.columns(7)
     for i, name in enumerate(weekday_names):
@@ -89,10 +93,7 @@ def render_calendar(year: int, month: int):
                 unsafe_allow_html=True,
             )
 
-    # 오늘 날짜 (강조용)
-    today_local = today
-
-    # 날짜 그리드
+    # ===== 날짜 그리드 =====
     for week_idx, week in enumerate(month_weeks):
         cols = st.columns(7)
         for i, day in enumerate(week):
@@ -103,8 +104,7 @@ def render_calendar(year: int, month: int):
                 else:
                     current_date = dt.date(year, month, day)
 
-                    # 오늘이면 배경색 강조
-                    is_today = (current_date == today_local)
+                    is_today = (current_date == today)
                     is_selected = (current_date == st.session_state.selected_date)
 
                     base_style = (
@@ -113,15 +113,12 @@ def render_calendar(year: int, month: int):
                         "border:1px solid #dddddd; cursor:pointer;"
                     )
 
-                    # 스타일 분기
                     if is_selected:
-                        # 선택된 날짜
                         style = (
                             base_style
                             + "background-color:#4b8df8; color:white; font-weight:700;"
                         )
                     elif is_today:
-                        # 오늘 날짜
                         style = (
                             base_style
                             + "background-color:#ffe9b5; color:#333333; font-weight:700;"
@@ -129,38 +126,41 @@ def render_calendar(year: int, month: int):
                     else:
                         style = base_style + "background-color:white; color:#333333;"
 
-                    # 버튼으로 날짜 선택
+                    # 날짜 버튼
                     if st.button(
                         f"{day}",
                         key=f"day_{year}_{month}_{day}",
                     ):
                         st.session_state.selected_date = current_date
 
-                    # 버튼 텍스트를 꾸미려고 한 번 더 마크다운으로 덮어 씌우는 대신,
-                    # 버튼 대신 click-like 효과를 원하면 아래처럼 사용 가능:
+                    # 버튼 모양을 더 예쁘게 커스터마이징하려면,
                     # st.markdown(f"<div style='{style}'>{day}</div>", unsafe_allow_html=True)
+                    # 형태로 바꾸고, 클릭은 다른 방식으로 처리해도 됨.
 
 
 # ==================== 메인 영역 ====================
-st.title("일정? 바로잡 GO! (달력 UI 버전)")
+st.title("일정? 바로잡 GO! (달력 + 현재 시간 반영)")
 
 st.caption(
-    "현재 버전은 **달력 UI만 먼저 안정화**한 상태입니다. "
-    "나중에 여기에 구글 캘린더 / 구글 맵 연동을 올릴 수 있도록 구조를 단순하게 유지했습니다."
+    "이 달력은 **한국 시간(UTC+9)** 기준으로 오늘 날짜와 현재 시각을 반영합니다. "
+    "오늘 날짜는 노란색으로, 선택한 날짜는 파란색으로 표시돼요."
 )
 
+# 현재 연/월 가져오기
 year = st.session_state.cal_year
 month = st.session_state.cal_month
 
 # 달력 렌더링
 render_calendar(year, month)
 
-# 현재 선택된 날짜 표시
+# ==================== 선택된 날짜 / 현재 시각 표시 ====================
 st.markdown("---")
-st.markdown("### 선택된 날짜")
+st.markdown("### 선택된 날짜 / 현재 시각")
 
 if st.session_state.selected_date:
     sel = st.session_state.selected_date
-    st.write(f"**{sel.year}년 {sel.month}월 {sel.day}일** 이 선택되어 있습니다.")
+    st.write(f"**선택된 날짜:** {sel.year}년 {sel.month}월 {sel.day}일")
 else:
     st.write("아직 날짜를 선택하지 않았습니다.")
+
+st.write(f"**현재 시각 (KST):** {now.strftime('%Y-%m-%d %H:%M:%S')}")
