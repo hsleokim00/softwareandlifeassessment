@@ -20,7 +20,7 @@ st.set_page_config(
 # ==================== CSS (반응형 + 스타일) ====================
 st.markdown("""
 <style>
-/* 메인 컨테이너: 모바일에서도 보기 좋게 최대 폭 제한 + 중앙 정렬 */
+/* 메인 컨테이너 */
 .main .block-container {
     max-width: 900px;
     padding-top: 1.2rem;
@@ -73,44 +73,40 @@ div[data-testid="stButton"] > button[title^="EVENT:"] {
     color: white !important;
 }
 
-/* ✅ 모바일에서 달력 부분은 항상 7칸 그리드로 유지 */
+/* 오늘 날짜 / 선택된 날짜 스타일은 인라인 style로 넣음 */
+
+/* ✅ 달력 영역에서만, 모바일일 때 st.columns를 7칸 Grid로 강제 */
 @media (max-width: 768px) {
-    /* 달력 영역 안의 st.columns 들만 가로로 고정 */
-    .calendar-area div[data-testid="stColumns"] {
-        display: flex !important;
-        flex-direction: row !important;
-        flex-wrap: nowrap !important;
-        gap: 0.1rem !important;
+    .calendar-area [data-testid="stHorizontalBlock"] {
+        display: grid !important;
+        grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
+        grid-auto-rows: auto !important;
+        column-gap: 4px !important;
     }
 
-    .calendar-area div[data-testid="stColumns"] > div[data-testid="column"] {
-        flex: 0 0 calc(100% / 7) !important;
-        max-width: calc(100% / 7) !important;
+    .calendar-area [data-testid="column"] {
+        min-width: 0 !important;
         padding: 0.05rem !important;
     }
 
-    .calendar-area div[data-testid="stColumns"] > div[data-testid="column"] button {
-        width: 100% !important;
-    }
-}
-
-/* 모바일에서 세로 길이 줄이기: 셀 크기/여백 축소 */
-@media (max-width: 600px) {
-    .main .block-container {
-        max-width: 100%;
-        padding-left: 0.6rem;
-        padding-right: 0.6rem;
-    }
     .calendar-cell, .calendar-empty {
         width: min(12vw, 48px);
         height: min(12vw, 48px);
         margin-bottom: 2px;
         font-size: 0.85rem;
     }
-    div[data-testid="stButton"] > button {
-        font-size: 0.6rem;
-        padding-top: 0.15rem;
-        padding-bottom: 0.15rem;
+
+    .calendar-area [data-testid="column"] button {
+        width: 100% !important;
+        font-size: 0.6rem !important;
+        padding-top: 0.15rem !important;
+        padding-bottom: 0.15rem !important;
+    }
+
+    .main .block-container {
+        max-width: 100%;
+        padding-left: 0.6rem;
+        padding-right: 0.6rem;
     }
 }
 </style>
@@ -270,7 +266,7 @@ def render_calendar(year: int, month: int):
             move_month(1)
             st.rerun()
 
-    # ✅ 달력 전체를 calendar-area로 감싸서 CSS로만 제어
+    # ✅ 달력 전체를 calendar-area로 감싸서 모바일용 CSS가 이 부분에만 적용되게 함
     st.markdown('<div class="calendar-area">', unsafe_allow_html=True)
 
     # 요일 헤더
@@ -349,8 +345,7 @@ def render_calendar(year: int, month: int):
                         st.session_state.selected_date = current
                         st.rerun()
 
-    # calendar-area 닫기
-    st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)  # calendar-area 닫기
 
 
 # ==================== 메인 UI ====================
