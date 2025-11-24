@@ -20,14 +20,29 @@ st.set_page_config(
 # ==================== CSS (반응형 + 스타일) ====================
 st.markdown("""
 <style>
-/* 메인 컨테이너 */
 .main .block-container {
     max-width: 900px;
     padding-top: 1.2rem;
     padding-bottom: 2.5rem;
 }
 
-/* 달력 셀: 반응형 크기 (PC/모바일 모두 대응) */
+/* 달력 격자 */
+.calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-auto-rows: auto;
+    gap: 4px;
+    justify-items: center;
+}
+
+/* 요일 헤더 */
+.calendar-weekday {
+    text-align: center;
+    font-weight: 600;
+    margin-bottom: 0.1rem;
+}
+
+/* 날짜 셀 / 버튼 */
 .calendar-cell {
     width: min(11vw, 56px);
     height: min(11vw, 56px);
@@ -40,6 +55,7 @@ st.markdown("""
     border: 1px solid rgba(255,255,255,0.15);
     background-color: transparent;
     color: white;
+    cursor: pointer;
 }
 
 /* 빈 칸 */
@@ -51,91 +67,82 @@ st.markdown("""
     margin: 0 auto 3px auto;
 }
 
-/* 요일 헤더 */
-.calendar-weekday {
-    text-align: center;
-    font-weight: 600;
-    margin-bottom: 0.25rem;
+/* 오늘 / 선택 / 이벤트 */
+.calendar-cell.today {
+    border: 2px solid #FFD54F;
+}
+.calendar-cell.selected {
+    background-color: #4B8DF8;
+    color: white;
+}
+.calendar-cell.event-day {
+    box-shadow: 0 0 0 2px #ff5252 inset;
 }
 
-/* 아래 클릭용 버튼: 폭을 셀에 맞추기 위해 100% + 작게 */
+/* 공통 버튼 스타일 (오늘 버튼 등) */
 div[data-testid="stButton"] > button {
     padding-top: 0.2rem;
     padding-bottom: 0.2rem;
     border-radius: 999px;
-    font-size: 0.65rem;
+    font-size: 0.75rem;
 }
 
-/* 일정이 있는 날짜의 아래 버튼 (help/title이 EVENT: 로 시작) */
-div[data-testid="stButton"] > button[title^="EVENT:"] {
-    background-color: #ff5252 !important;
-    border-color: #ff8a80 !important;
-    color: white !important;
-}
-
-/* 오늘 날짜 / 선택된 날짜 스타일은 인라인 style로 넣음 */
-
-/* ✅ 달력 영역에서만, 모바일일 때 st.columns를 7칸 Grid로 강제 */
-@media (max-width: 768px) {
-    .calendar-area [data-testid="stHorizontalBlock"] {
-        display: grid !important;
-        grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
-        grid-auto-rows: auto !important;
-        column-gap: 4px !important;
-    }
-
-    .calendar-area [data-testid="column"] {
-        min-width: 0 !important;
-        padding: 0.05rem !important;
-    }
-
+/* 모바일 최적화 */
+@media (max-width: 600px) {
     .calendar-cell, .calendar-empty {
         width: min(12vw, 48px);
         height: min(12vw, 48px);
-        margin-bottom: 2px;
         font-size: 0.85rem;
-    }
-
-    .calendar-area [data-testid="column"] button {
-        width: 100% !important;
-        font-size: 0.6rem !important;
-        padding-top: 0.15rem !important;
-        padding-bottom: 0.15rem !important;
-    }
-
-    .main .block-container {
-        max-width: 100%;
-        padding-left: 0.6rem;
-        padding-right: 0.6rem;
     }
 }
 </style>
 """, unsafe_allow_html=True)
 
-# ==================== KST(한국 시간) 기준 현재 시각/오늘 날짜 ====================
+# ==================== KST 기준 현재 시각 ====================
 KST = dt.timezone(dt.timedelta(hours=9))
 now = dt.datetime.now(KST)
 today = now.date()
 
-# ==================== 세션 상태 초기화 ====================
+# ==================== 세션 상태 ====================
 if "cal_year" not in st.session_state:
     st.session_state.cal_year = today.year
-
 if "cal_month" not in st.session_state:
     st.session_state.cal_month = today.month
-
 if "selected_date" not in st.session_state:
     st.session_state.selected_date = today
-
 if "local_events" not in st.session_state:
-    # 각 이벤트: {id, title, start_dt, end_dt, location, source}
     st.session_state.local_events: List[Dict] = []
 
+# ==================== URL 파라미터에서 클릭된 날짜 반영 ====================
+clicked_date_str: Optional[str] = None
+try:
+    query_params_attr = getattr(st, "query_params", None)
+    if query_params_attr is not None:
+        qp = dict(query_params_attr)
+    else:
+        qp = st.experimental_get_query_params()
+    val = qp.get("sel")
+    if val:
+        if isinstance(val, list):
+            clicked_date_str = val[0]
+        else:
+            clicked_date_str = val
+except Exception:
+    clicked_date_str = None
 
-# ==================== 구글 캘린더 & 맵 연동용 함수들 ====================
+if clicked_date_str:
+    try:
+        clicked_date = dt.date.fromisoformat(clicked_date_str)
+        st.session_state.selected_date = clicked_date
+        st.session_state.cal_year = clicked_date.year
+        st.session_state.cal_month = clicked_date.month
+    except Exception:
+        pass
+
+# ==================== 구글 캘린더 & 맵 연동 함수 ====================
 
 def fetch_google_events(creds, date: dt.date) -> List[Dict]:
-    """주어진 날짜(date)에 해당하는 구글 캘린더 일정 목록 반환."""
+    """특정 날짜의 구글 캘린더 일정 가져오기."""
     if creds is None or build is None:
         return []
 
@@ -144,19 +151,16 @@ def fetch_google_events(creds, date: dt.date) -> List[Dict]:
     start_of_day = dt.datetime.combine(date, dt.time(0, 0, tzinfo=KST))
     end_of_day = start_of_day + dt.timedelta(days=1)
 
-    time_min = start_of_day.isoformat()
-    time_max = end_of_day.isoformat()
-
     events_result = service.events().list(
         calendarId="primary",
-        timeMin=time_min,
-        timeMax=time_max,
+        timeMin=start_of_day.isoformat(),
+        timeMax=end_of_day.isoformat(),
         singleEvents=True,
         orderBy="startTime",
     ).execute()
 
     items = events_result.get("items", [])
-    events = []
+    events: List[Dict] = []
 
     for ev in items:
         start_str = ev["start"].get("dateTime") or ev["start"].get("date")
@@ -185,9 +189,7 @@ def fetch_google_events(creds, date: dt.date) -> List[Dict]:
 
 def estimate_travel_minutes(origin: str, destination: str, api_key: Optional[str]) -> Optional[float]:
     """구글 Distance Matrix API 사용해 이동 시간(분) 추정."""
-    if not api_key:
-        return None
-    if not origin or not destination:
+    if not api_key or not origin or not destination:
         return None
 
     url = "https://maps.googleapis.com/maps/api/distancematrix/json"
@@ -221,8 +223,8 @@ def find_nearest_event_by_time(events: List[Dict], target_start: dt.datetime) ->
     if not events:
         return None
 
-    best = None
-    best_diff = None
+    best: Optional[Dict] = None
+    best_diff: Optional[float] = None
     for ev in events:
         diff = abs((ev["start_dt"] - target_start).total_seconds())
         if best_diff is None or diff < best_diff:
@@ -230,17 +232,15 @@ def find_nearest_event_by_time(events: List[Dict], target_start: dt.datetime) ->
             best = ev
     return best
 
-
 # ==================== 달력 함수 ====================
 
 def move_month(delta: int):
     y = st.session_state.cal_year
-    m = st.session_state.cal_month
-    m += delta
-    if m <= 0:
+    m = st.session_state.cal_month + delta
+    if m < 1:
         m += 12
         y -= 1
-    elif m >= 13:
+    elif m > 12:
         m -= 12
         y += 1
     st.session_state.cal_year = y
@@ -255,7 +255,7 @@ def render_calendar(year: int, month: int):
     with c1:
         if st.button("◀", key=f"prev_{year}_{month}"):
             move_month(-1)
-            st.rerun()
+            st.experimental_rerun()
     with c2:
         st.markdown(
             f"<h4 style='text-align:center;'>{year}년 {month}월</h4>",
@@ -264,96 +264,71 @@ def render_calendar(year: int, month: int):
     with c3:
         if st.button("▶", key=f"next_{year}_{month}"):
             move_month(1)
-            st.rerun()
+            st.experimental_rerun()
 
-    # ✅ 달력 전체를 calendar-area로 감싸서 모바일용 CSS가 이 부분에만 적용되게 함
-    st.markdown('<div class="calendar-area">', unsafe_allow_html=True)
-
-    # 요일 헤더
-    weekdays = ["월", "화", "수", "목", "금", "토", "일"]
-    cols = st.columns(7)
-    for i, w in enumerate(weekdays):
-        with cols[i]:
-            st.markdown(f"<div class='calendar-weekday'>{w}</div>", unsafe_allow_html=True)
-
-    # 달력 데이터 (월요일 시작)
+    # HTML 캘린더 (클릭 가능한 버튼, form + query param 이용)
     cal = calendar.Calendar(firstweekday=0)
     weeks = cal.monthdayscalendar(year, month)
 
+    selected = st.session_state.selected_date
+    local_events = st.session_state.local_events
+    event_dates = {ev["start_dt"].date() for ev in local_events}
+
+    html_parts: List[str] = []
+    html_parts.append('<form method="get"><div class="calendar-grid">')
+
+    # 요일 헤더
+    for w in ["월", "화", "수", "목", "금", "토", "일"]:
+        html_parts.append(f'<div class="calendar-weekday">{w}</div>')
+
+    # 날짜 셀
     for week in weeks:
-        cols = st.columns(7)
-        for i, day in enumerate(week):
-            with cols[i]:
-                if day == 0:
-                    st.markdown("<div class='calendar-empty'></div>", unsafe_allow_html=True)
-                else:
-                    current = dt.date(year, month, day)
-                    is_today = (current == today)
-                    is_selected = (current == st.session_state.selected_date)
+        for day in week:
+            if day == 0:
+                html_parts.append('<div class="calendar-empty"></div>')
+                continue
 
-                    # 위 숫자 칸 스타일
-                    border_color = "rgba(255,255,255,0.15)"
-                    bg_color = "transparent"
-                    text_color = "white"
+            current = dt.date(year, month, day)
+            classes = ["calendar-cell"]
+            title_attr = ""
 
-                    if is_today:
-                        border_color = "#FFD54F"   # 오늘 노란 테두리
-                    if is_selected:
-                        bg_color = "#4B8DF8"       # 선택 파란 배경
-                        text_color = "white"
-                        if is_today:
-                            border_color = "#FFD54F"
+            if current == today:
+                classes.append("today")
+            if current == selected:
+                classes.append("selected")
+            if current in event_dates:
+                classes.append("event-day")
+                # 툴팁: 로컬 일정 요약
+                evs = [
+                    ev for ev in local_events
+                    if ev["start_dt"].date() == current
+                ]
+                parts = []
+                for ev in sorted(evs, key=lambda e: e["start_dt"]):
+                    s = ev["start_dt"].strftime("%H:%M")
+                    e = ev["end_dt"].strftime("%H:%M")
+                    loc = f" @ {ev['location']}" if ev["location"] else ""
+                    parts.append(f"{ev['title']} ({s}~{e}){loc}")
+                if parts:
+                    tooltip = " | ".join(parts).replace('"', "'")
+                    title_attr = f' title="{tooltip}"'
 
-                    st.markdown(
-                        f"""
-<div class="calendar-cell"
-     style="border: 2px solid {border_color};
-            background-color: {bg_color};
-            color: {text_color};">
-    {day}
-</div>
-""",
-                        unsafe_allow_html=True,
-                    )
+            class_str = " ".join(classes)
+            value_str = current.isoformat()
+            html_parts.append(
+                f'<button type="submit" class="{class_str}" name="sel" value="{value_str}"{title_attr}>{day}</button>'
+            )
 
-                    # 해당 날짜의 로컬 일정들
-                    local_for_day = [
-                        ev for ev in st.session_state.local_events
-                        if ev["start_dt"].date() == current
-                    ]
+    html_parts.append("</div></form>")
 
-                    # 툴팁 텍스트 (hover 시 브라우저 기본 툴팁)
-                    tooltip = None
-                    if local_for_day:
-                        parts = []
-                        for ev in sorted(local_for_day, key=lambda e: e["start_dt"]):
-                            parts.append(
-                                f"{ev['title']} "
-                                f"({ev['start_dt'].strftime('%H:%M')}~{ev['end_dt'].strftime('%H:%M')})"
-                                + (f" @ {ev['location']}" if ev["location"] else "")
-                            )
-                        tooltip = "EVENT: " + " | ".join(parts)
-
-                    # 아래 클릭용 버튼 (날짜 선택 기능 + 일정 있으면 빨간색 + 툴팁)
-                    clicked = st.button(
-                        "선택" if current == st.session_state.selected_date else " ",
-                        key=f"click_{year}_{month}_{day}",
-                        help=tooltip  # title 속성으로 들어감
-                    )
-
-                    if clicked:
-                        st.session_state.selected_date = current
-                        st.rerun()
-
-    st.markdown("</div>", unsafe_allow_html=True)  # calendar-area 닫기
-
+    st.markdown("\n".join(html_parts), unsafe_allow_html=True)
 
 # ==================== 메인 UI ====================
 
 st.title("일정? 바로잡 GO!")
 st.caption(f"현재 시각 (KST 기준): {now.strftime('%Y-%m-%d %H:%M:%S')}")
 
-# ---- 드롭다운으로 날짜 직접 선택 ----
+# 날짜 선택 UI (드롭다운)
 st.markdown("### 날짜 선택")
 
 cY, cM, cD = st.columns(3)
@@ -374,16 +349,16 @@ st.session_state.cal_year = year_sel
 st.session_state.cal_month = month_sel
 st.session_state.selected_date = dt.date(year_sel, month_sel, day_sel)
 
-# ---- 달력 렌더링 ----
+# 달력 렌더링
 render_calendar(st.session_state.cal_year, st.session_state.cal_month)
 
-# ---- 오늘 버튼 ----
+# 오늘 버튼
 st.markdown("---")
 if st.button("오늘로 이동"):
     st.session_state.cal_year = today.year
     st.session_state.cal_month = today.month
     st.session_state.selected_date = today
-    st.rerun()
+    st.experimental_rerun()
 
 sel_date = st.session_state.selected_date
 st.markdown(f"### 선택된 날짜: **{sel_date.year}년 {sel_date.month}월 {sel_date.day}일**")
