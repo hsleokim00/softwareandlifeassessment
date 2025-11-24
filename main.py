@@ -1,330 +1,166 @@
 import streamlit as st
 import datetime as dt
 import calendar
-import os
-import hmac
-import hashlib
-import base64
-
-from google_auth_oauthlib.flow import Flow
-from googleapiclient.discovery import build
 
 # ==================== 기본 설정 ====================
-st.write("DEBUG st.secrets keys:", list(st.secrets.keys()))
-st.write("DEBUG redirect_uri:", st.secrets["google_oauth"]["redirect_uri"])
-st.write("DEBUG client_id prefix:", st.secrets["google_oauth"]["client_id"][:20])
-
-
 st.set_page_config(
     page_title="일정? 바로잡 GO!",
     page_icon="📅",
     layout="centered",
 )
 
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
-
+# ==================== 세션 상태 초기화 ====================
 today = dt.date.today()
 
-# 세션 상태 초기화
-if "logged_in" not in st.session_state:
-    st.session_state.logged_in = False
-if "creds" not in st.session_state:
-    st.session_state.creds = None
 if "cal_year" not in st.session_state:
     st.session_state.cal_year = today.year
+
 if "cal_month" not in st.session_state:
     st.session_state.cal_month = today.month
+
 if "selected_date" not in st.session_state:
     st.session_state.selected_date = today
 
-# ==================== 스타일 ====================
-st.markdown(
+
+# ==================== 헬퍼 함수들 ====================
+def move_month(delta: int):
     """
-    <style>
-    .title-text {
-        font-size: 2rem;
-        font-weight: 800;
-        color: #f5f5f5;
-        margin: 0.8rem 0 0.5rem 0;
-    }
-    .pill-input > div > input {
-        border-radius: 999px !important;
-    }
-    .pill-button > button {
-        border-radius: 999px !important;
-        font-weight: 600;
-        padding: 0.6rem 2.0rem;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-# ==================== OAuth Flow 도우미 ====================
-def make_flow() -> Flow:
-    """secrets.toml에 저장된 정보로 OAuth Flow 객체 만들기"""
-    cfg = {
-        "web": {
-            "client_id": st.secrets["google_oauth"]["client_id"],
-            "client_secret": st.secrets["google_oauth"]["client_secret"],
-            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
-            "token_uri": "https://oauth2.googleapis.com/token",
-            "redirect_uris": [st.secrets["google_oauth"]["redirect_uri"]],
-        }
-    }
-    flow = Flow.from_client_config(cfg, scopes=SCOPES)
-    flow.redirect_uri = st.secrets["google_oauth"]["redirect_uri"]
-    return flow
-
-
-def get_calendar_service():
-    if st.session_state.creds is None:
-        return None
-    return build("calendar", "v3", credentials=st.session_state.creds)
-
-
-# ==================== CSRF용 state 생성/검증 ====================
-def generate_state() -> str:
+    delta = +1 이면 다음 달, -1 이면 이전 달로 이동.
+    연도 넘어가는 부분까지 처리.
     """
-    서버 비밀키(state_secret)로 서명된 state 문자열 생성.
-    세션에 저장할 필요 없이, 나중에 서명만 검증하면 됨.
+    year = st.session_state.cal_year
+    month = st.session_state.cal_month
+
+    # month를 1~12 범위로 안전하게 이동
+    month += delta
+    if month <= 0:
+        month += 12
+        year -= 1
+    elif month >= 13:
+        month -= 12
+        year += 1
+
+    st.session_state.cal_year = year
+    st.session_state.cal_month = month
+
+
+def render_calendar(year: int, month: int):
     """
-    secret_key = st.secrets["google_oauth"]["state_secret"].encode("utf-8")
-    nonce = os.urandom(16)  # 랜덤 16바이트
-    sig = hmac.new(secret_key, nonce, hashlib.sha256).digest()
-    data = nonce + sig  # 총 16 + 32 = 48바이트
-    return base64.urlsafe_b64encode(data).decode("utf-8")
-
-
-def verify_state(state_str: str) -> bool:
+    주어진 year, month 에 대한 달력을 화면에 렌더링.
+    - 월의 일수는 calendar 모듈에서 자동으로 계산 (윤년 포함)
+    - 오늘 날짜는 배경 색으로 강조
+    - 날짜를 클릭하면 selected_date를 업데이트
     """
-    구글에서 돌려준 state 문자열이 우리가 만든 것인지 검증.
-    (nonce + HMAC 서명 구조인지 확인)
-    """
-    try:
-        data = base64.urlsafe_b64decode(state_str.encode("utf-8"))
-    except Exception:
-        return False
+    st.markdown("### 📅 달력")
 
-    if len(data) != 48:
-        return False
+    # 요일 헤더 (월~일 또는 일~토 원하는 걸로 조정 가능)
+    # 여기서는 '월'을 첫 번째 요일로 설정 (한국 스타일)
+    cal = calendar.Calendar(firstweekday=0)  # 0: 월요일, 6: 일요일 (파이썬 기본은 월요일)
+    # → 만약 일요일부터 시작하고 싶으면 firstweekday=6 으로 바꿔도 됨
 
-    nonce = data[:16]
-    sig = data[16:]
+    # monthdayscalendar: 해당 월을 주 단위 리스트로 반환 (0은 빈 칸)
+    month_weeks = cal.monthdayscalendar(year, month)
 
-    secret_key = st.secrets["google_oauth"]["state_secret"].encode("utf-8")
-    expected_sig = hmac.new(secret_key, nonce, hashlib.sha256).digest()
-    return hmac.compare_digest(sig, expected_sig)
+    # 헤더: 년/월 표시 + 이동 버튼
+    col_prev, col_title, col_next = st.columns([1, 3, 1])
+    with col_prev:
+        if st.button("◀", key="prev_month"):
+            move_month(-1)
+            st.experimental_rerun()
 
-
-def fetch_month_event_days(service, year: int, month: int):
-    """주어진 연/월에 '일정이 있는 날짜(day 숫자)' 집합 반환"""
-    if service is None:
-        return set()
-
-    from datetime import datetime, timezone
-
-    start = dt.date(year, month, 1)
-    if month == 12:
-        end = dt.date(year + 1, 1, 1)
-    else:
-        end = dt.date(year, month + 1, 1)
-
-    time_min = datetime.combine(start, dt.time(0, 0), tzinfo=timezone.utc).isoformat()
-    time_max = datetime.combine(end, dt.time(0, 0), tzinfo=timezone.utc).isoformat()
-
-    events_result = (
-        service.events()
-        .list(
-            calendarId="primary",
-            timeMin=time_min,
-            timeMax=time_max,
-            singleEvents=True,
-            orderBy="startTime",
+    with col_title:
+        st.markdown(
+            f"<h4 style='text-align:center;'>{year}년 {month}월</h4>",
+            unsafe_allow_html=True,
         )
-        .execute()
-    )
 
-    items = events_result.get("items", [])
-    days = set()
-    for event in items:
-        start_info = event.get("start", {})
-        date_str = start_info.get("date") or start_info.get("dateTime")
-        if not date_str:
-            continue
-        date_only = date_str[:10]
-        try:
-            y, m, d = map(int, date_only.split("-"))
-            days.add(d)
-        except Exception:
-            continue
-    return days
+    with col_next:
+        if st.button("▶", key="next_month"):
+            move_month(1)
+            st.experimental_rerun()
 
-
-# ==================== 1. OAuth 콜백 처리 (code + state 검증) ====================
-# 🔁 실험용 API → 정식 API로 변경
-params = st.query_params
-code = params.get("code", [None])[0]
-state_from_google = params.get("state", [None])[0]
-
-if code and state_from_google and not st.session_state.logged_in:
-    # CSRF 방어: state 서명 검증
-    if not verify_state(state_from_google):
-        st.error("OAuth state 검증에 실패했습니다. 다시 로그인해 주세요.")
-        # st.experimental_set_query_params() 대체
-        st.query_params.clear()
-    else:
-        try:
-            flow = make_flow()
-            flow.fetch_token(code=code)
-            st.session_state.creds = flow.credentials
-            st.session_state.logged_in = True
-            # URL 정리
-            st.query_params.clear()
-        except Exception as e:
-            st.error("구글 로그인 중 오류가 발생했습니다. 다시 시도해 주세요.")
-            st.write(e)
-            st.query_params.clear()
-
-# ==================== 상단: 제목 + 로그인 버튼 ====================
-top_left, top_right = st.columns([4, 1])
-
-with top_left:
-    st.markdown('<div class="title-text">일정? 바로잡 GO!</div>', unsafe_allow_html=True)
-
-with top_right:
-    if st.session_state.logged_in:
-        st.success("구글 로그인 완료 ✅")
-    else:
-        if st.button("구글로 로그인"):
-            flow = make_flow()
-            state = generate_state()
-            auth_url, _ = flow.authorization_url(
-                access_type="offline",
-                include_granted_scopes="true",
-                prompt="consent",
-                state=state,
-            )
-            # 현재 탭에서 바로 구글 로그인 페이지로 이동
+    # 요일 이름 표시
+    weekday_names = ["월", "화", "수", "목", "금", "토", "일"]
+    cols = st.columns(7)
+    for i, name in enumerate(weekday_names):
+        with cols[i]:
             st.markdown(
-                f'<meta http-equiv="refresh" content="0; url={auth_url}">',
+                f"<div style='text-align:center; font-weight:600;'>{name}</div>",
                 unsafe_allow_html=True,
             )
-            st.stop()
 
-st.write("")
+    # 오늘 날짜 (강조용)
+    today_local = today
 
-service = get_calendar_service() if st.session_state.logged_in else None
+    # 날짜 그리드
+    for week_idx, week in enumerate(month_weeks):
+        cols = st.columns(7)
+        for i, day in enumerate(week):
+            with cols[i]:
+                if day == 0:
+                    # 이 달에 속하지 않는 칸 (빈 칸)
+                    st.write(" ")
+                else:
+                    current_date = dt.date(year, month, day)
 
-# ==================== 가운데: 항상 펼쳐진 달력 ====================
-st.subheader("캘린더")
+                    # 오늘이면 배경색 강조
+                    is_today = (current_date == today_local)
+                    is_selected = (current_date == st.session_state.selected_date)
 
-if not st.session_state.logged_in:
-    st.caption("구글 로그인 전에는 날짜만 선택 가능한 일반적인 캘린더입니다.")
+                    base_style = (
+                        "display:block; width:100%; padding:0.4rem 0; "
+                        "border-radius:0.5rem; text-align:center; "
+                        "border:1px solid #dddddd; cursor:pointer;"
+                    )
+
+                    # 스타일 분기
+                    if is_selected:
+                        # 선택된 날짜
+                        style = (
+                            base_style
+                            + "background-color:#4b8df8; color:white; font-weight:700;"
+                        )
+                    elif is_today:
+                        # 오늘 날짜
+                        style = (
+                            base_style
+                            + "background-color:#ffe9b5; color:#333333; font-weight:700;"
+                        )
+                    else:
+                        style = base_style + "background-color:white; color:#333333;"
+
+                    # 버튼으로 날짜 선택
+                    if st.button(
+                        f"{day}",
+                        key=f"day_{year}_{month}_{day}",
+                    ):
+                        st.session_state.selected_date = current_date
+
+                    # 버튼 텍스트를 꾸미려고 한 번 더 마크다운으로 덮어 씌우는 대신,
+                    # 버튼 대신 click-like 효과를 원하면 아래처럼 사용 가능:
+                    # st.markdown(f"<div style='{style}'>{day}</div>", unsafe_allow_html=True)
+
+
+# ==================== 메인 영역 ====================
+st.title("일정? 바로잡 GO! (달력 UI 버전)")
+
+st.caption(
+    "현재 버전은 **달력 UI만 먼저 안정화**한 상태입니다. "
+    "나중에 여기에 구글 캘린더 / 구글 맵 연동을 올릴 수 있도록 구조를 단순하게 유지했습니다."
+)
+
+year = st.session_state.cal_year
+month = st.session_state.cal_month
+
+# 달력 렌더링
+render_calendar(year, month)
+
+# 현재 선택된 날짜 표시
+st.markdown("---")
+st.markdown("### 선택된 날짜")
+
+if st.session_state.selected_date:
+    sel = st.session_state.selected_date
+    st.write(f"**{sel.year}년 {sel.month}월 {sel.day}일** 이 선택되어 있습니다.")
 else:
-    st.caption("구글 캘린더에 일정이 있는 날에는 ● 점이 표시됩니다.")
-
-year = st.session_state.cal_year
-month = st.session_state.cal_month
-
-# ---- 월 이동 헤더 ----
-cal_top_left, cal_top_mid, cal_top_right = st.columns([1, 3, 1])
-
-with cal_top_left:
-    if st.button("◀ 이전달"):
-        if month == 1:
-            st.session_state.cal_month = 12
-            st.session_state.cal_year -= 1
-        else:
-            st.session_state.cal_month -= 1
-
-with cal_top_mid:
-    st.markdown(f"### {year}년 {month}월")
-
-with cal_top_right:
-    if st.button("다음달 ▶"):
-        if month == 12:
-            st.session_state.cal_month = 1
-            st.session_state.cal_year += 1
-        else:
-            st.session_state.cal_month += 1
-
-# 업데이트된 값 다시 읽기
-year = st.session_state.cal_year
-month = st.session_state.cal_month
-
-# 이 달의 일정 있는 날짜들
-days_with_events = fetch_month_event_days(service, year, month) if service else set()
-
-# ---- 요일 헤더 ----
-weekday_cols = st.columns(7)
-weekdays = ["일", "월", "화", "수", "목", "금", "토"]
-for i, wd in enumerate(weekdays):
-    with weekday_cols[i]:
-        st.markdown(f"**{wd}**")
-
-# ---- 달력 그리드 ----
-cal = calendar.Calendar(firstweekday=6)  # 6=일요일
-weeks = cal.monthdayscalendar(year, month)
-
-for week in weeks:
-    cols = st.columns(7)
-    for i, day in enumerate(week):
-        with cols[i]:
-            if day == 0:
-                st.write("")
-            else:
-                date_obj = dt.date(year, month, day)
-                selected_date = st.session_state.selected_date
-
-                label = f"{day}"
-                if date_obj == selected_date:
-                    label = f"[{label}]"
-                if day in days_with_events:
-                    label = f"{label} ●"
-
-                if st.button(label, key=f"day-{year}-{month}-{day}"):
-                    st.session_state.selected_date = date_obj
-
-st.write("---")
-
-# ==================== 아래: 새 일정 입력 ====================
-st.markdown("#### 새 일정 입력")
-
-selected_date = st.session_state.selected_date
-st.write(f"선택한 날짜: **{selected_date}**")
-
-c1, c2, c3, c4 = st.columns(4)
-
-with c1:
-    title = st.text_input("일정명", key="title", placeholder="예: 수학 학원")
-
-with c2:
-    st.markdown('<div class="pill-input">', unsafe_allow_html=True)
-    place = st.text_input("장소", key="place", placeholder="예: OO학원")
-    st.markdown('</div>', unsafe_allow_html=True)
-
-with c3:
-    start_time = st.time_input("시작시간", value=dt.time(18, 0))
-
-with c4:
-    end_time = st.time_input("종료시간", value=dt.time(19, 0))
-
-st.write("")
-
-btn_col = st.columns([1, 2, 1])[1]
-with btn_col:
-    clicked = st.button(
-        "입력",
-        key="submit",
-        disabled=not st.session_state.logged_in,
-        help="구글 로그인 후 사용 가능합니다.",
-    )
-
-if clicked and st.session_state.logged_in:
-    st.success(
-        f"새 일정이 준비되었습니다: "
-        f"{selected_date} {start_time.strftime('%H:%M')}~{end_time.strftime('%H:%M')} "
-        f"/ {title} @ {place}"
-    )
-    # TODO: 여기서 기존 일정 + 교통/동선 체크 → OK면 캘린더에 insert
+    st.write("아직 날짜를 선택하지 않았습니다.")
