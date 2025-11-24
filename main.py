@@ -73,6 +73,29 @@ div[data-testid="stButton"] > button[title^="EVENT:"] {
     color: white !important;
 }
 
+/* ✅ 모바일에서도 달력 7칸 가로 그리드 유지 */
+@media (max-width: 768px) {
+    /* 한 주(week)를 담는 가로 블록을 항상 가로+줄바꿈 그리드로 */
+    div[data-testid="stHorizontalBlock"] {
+        display: flex !important;
+        flex-direction: row !important;
+        flex-wrap: wrap !important;
+        gap: 0.25rem !important;
+    }
+
+    /* 각 column을 7등분 그리드로 */
+    div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+        flex: 0 0 calc(100% / 7) !important;
+        max-width: calc(100% / 7) !important;
+        padding: 0.1rem !important;
+    }
+
+    /* 숫자 아래 버튼이 셀 폭 꽉 채우도록 */
+    div[data-testid="stHorizontalBlock"] > div[data-testid="column"] button {
+        width: 100% !important;
+    }
+}
+
 /* 모바일에서 세로 길이 줄이기: 셀 크기/여백 축소 */
 @media (max-width: 600px) {
     .main .block-container {
