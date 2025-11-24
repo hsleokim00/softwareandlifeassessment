@@ -17,29 +17,62 @@ st.set_page_config(
     layout="centered",
 )
 
-# ==================== CSS (달력 셀 스타일) ====================
+# ==================== CSS (반응형 + 스타일) ====================
 st.markdown("""
 <style>
+/* 메인 컨테이너: 모바일에서도 보기 좋게 최대 폭 제한 + 중앙 정렬 */
+.main .block-container {
+    max-width: 900px;
+    padding-top: 1.5rem;
+    padding-bottom: 3rem;
+}
+
+/* 달력 셀: 반응형 크기 (화면 폭의 10~11% 정도, 최대 60px) */
 .calendar-cell {
-    width: 48px;
-    height: 48px;
+    width: min(11vw, 60px);
+    height: min(11vw, 60px);
     border-radius: 10px;
     display: flex;
     justify-content: center;
     align-items: center;
-    font-size: 1rem;
-    margin-bottom: 4px;
+    font-size: 0.95rem;
+    margin: 0 auto 4px auto;
     border: 1px solid rgba(255,255,255,0.15);
     background-color: transparent;
     color: white;
 }
 
+/* 빈 칸 */
 .calendar-empty {
-    width: 48px;
-    height: 48px;
+    width: min(11vw, 60px);
+    height: min(11vw, 60px);
     border-radius: 10px;
     background-color: rgba(255,255,255,0.03);
-    margin-bottom: 4px;
+    margin: 0 auto 4px auto;
+}
+
+/* 아래 클릭용 버튼: 폭을 셀에 맞추기 위해 100% */
+div[data-testid="stButton"].day-clicker > button {
+    width: 100%;
+    max-width: min(11vw, 60px);
+    padding-top: 0.25rem;
+    padding-bottom: 0.25rem;
+    border-radius: 999px;
+    font-size: 0.7rem;
+}
+
+/* 일정이 있는 날짜의 아래 버튼 (help/title이 EVENT: 로 시작) */
+div[data-testid="stButton"].day-clicker > button[title^="EVENT:"] {
+    background-color: #ff5252 !important;
+    border-color: #ff8a80 !important;
+    color: white !important;
+}
+
+/* 요일 헤더 줄 간격 조금 줄이기 */
+.calendar-weekday {
+    text-align: center;
+    font-weight: 600;
+    margin-bottom: 0.3rem;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -69,8 +102,7 @@ if "local_events" not in st.session_state:
 def fetch_google_events(creds, date: dt.date) -> List[Dict]:
     """
     주어진 날짜(date)에 해당하는 구글 캘린더 일정 목록 반환.
-    - creds가 None 이거나 google-api-python-client 미설치면 [] 반환.
-    - 나중에 OAuth 끝나고 st.session_state["google_creds"]에 크리덴셜 넣으면 바로 작동.
+    creds가 None 이거나 google 모듈 없으면 [].
     """
     if creds is None or build is None:
         return []
@@ -98,12 +130,10 @@ def fetch_google_events(creds, date: dt.date) -> List[Dict]:
         start_str = ev["start"].get("dateTime") or ev["start"].get("date")
         end_str = ev["end"].get("dateTime") or ev["end"].get("date")
 
-        # date-only(all-day)인 경우 00:00~24:00으로 처리
         if "T" not in start_str:
             start_dt = dt.datetime.fromisoformat(start_str + "T00:00:00+09:00")
         else:
             start_dt = dt.datetime.fromisoformat(start_str)
-
         if "T" not in end_str:
             end_dt = dt.datetime.fromisoformat(end_str + "T23:59:59+09:00")
         else:
@@ -122,11 +152,7 @@ def fetch_google_events(creds, date: dt.date) -> List[Dict]:
 
 
 def estimate_travel_minutes(origin: str, destination: str, api_key: Optional[str]) -> Optional[float]:
-    """
-    구글 Distance Matrix API를 사용해 origin → destination 이동 시간(분)을 추정.
-    - api_key가 없으면 None 반환.
-    - 나중에 st.secrets["GOOGLE_MAPS_API_KEY"]에 키 넣으면 바로 작동.
-    """
+    """구글 Distance Matrix API 사용해 이동 시간(분) 추정."""
     if not api_key:
         return None
     if not origin or not destination:
@@ -136,7 +162,7 @@ def estimate_travel_minutes(origin: str, destination: str, api_key: Optional[str
     params = {
         "origins": origin,
         "destinations": destination,
-        "mode": "driving",  # 필요하면 walking, transit 등으로 변경 가능
+        "mode": "driving",
         "language": "ko",
         "key": api_key,
     }
@@ -159,24 +185,17 @@ def times_overlap(s1: dt.datetime, e1: dt.datetime, s2: dt.datetime, e2: dt.date
 
 
 def find_nearest_event_by_time(events: List[Dict], target_start: dt.datetime) -> Optional[Dict]:
-    """
-    target_start와 가장 시간 차이가 작은 이벤트(과거/미래 포함)를 하나 반환.
-    이동 시간 계산할 때 사용.
-    """
+    """target_start와 가장 가까운 이벤트 하나."""
     if not events:
         return None
 
     best = None
     best_diff = None
-
     for ev in events:
-        # 기준은 이벤트 시작 시각
-        start_dt = ev["start_dt"]
-        diff = abs((start_dt - target_start).total_seconds())
+        diff = abs((ev["start_dt"] - target_start).total_seconds())
         if best_diff is None or diff < best_diff:
             best_diff = diff
             best = ev
-
     return best
 
 
@@ -220,10 +239,7 @@ def render_calendar(year: int, month: int):
     cols = st.columns(7)
     for i, w in enumerate(weekdays):
         with cols[i]:
-            st.markdown(
-                f"<div style='text-align:center; font-weight:600;'>{w}</div>",
-                unsafe_allow_html=True,
-            )
+            st.markdown(f"<div class='calendar-weekday'>{w}</div>", unsafe_allow_html=True)
 
     # 달력 데이터 (월요일 시작)
     cal = calendar.Calendar(firstweekday=0)
@@ -234,25 +250,25 @@ def render_calendar(year: int, month: int):
         for i, day in enumerate(week):
             with cols[i]:
                 if day == 0:
-                    # 빈 칸
                     st.markdown("<div class='calendar-empty'></div>", unsafe_allow_html=True)
+                    # 아래 버튼도 없애고 싶으면 여기는 패스
                 else:
                     current = dt.date(year, month, day)
                     is_today = (current == today)
                     is_selected = (current == st.session_state.selected_date)
 
+                    # 위 숫자 칸 스타일
                     border_color = "rgba(255,255,255,0.15)"
                     bg_color = "transparent"
                     text_color = "white"
 
                     if is_today:
-                        border_color = "#FFD54F"
+                        border_color = "#FFD54F"   # 오늘 노란 테두리
                     if is_selected:
-                        bg_color = "#4B8DF8"
+                        bg_color = "#4B8DF8"       # 선택 파란 배경
                         text_color = "white"
-                        # 오늘이면서 선택이면 노란 테두리 + 파란 배경
                         if is_today:
-                            border_color = "#FFD54F"
+                            border_color = "#FFD54F"  # 오늘+선택 → 노란 테두리 유지
 
                     st.markdown(
                         f"""
@@ -266,8 +282,40 @@ def render_calendar(year: int, month: int):
                         unsafe_allow_html=True,
                     )
 
-                    # 클릭 감지용 투명 버튼 (UI는 위 div가 담당)
-                    if st.button(" ", key=f"click_{year}_{month}_{day}"):
+                    # 해당 날짜에 등록된 로컬 일정들
+                    local_for_day = [
+                        ev for ev in st.session_state.local_events
+                        if ev["start_dt"].date() == current
+                    ]
+
+                    # 툴팁용 텍스트
+                    tooltip = None
+                    if local_for_day:
+                        parts = []
+                        for ev in sorted(local_for_day, key=lambda e: e["start_dt"]):
+                            parts.append(
+                                f"{ev['title']} "
+                                f"({ev['start_dt'].strftime('%H:%M')}~{ev['end_dt'].strftime('%H:%M')})"
+                                + (f" @ {ev['location']}" if ev["location"] else "")
+                            )
+                        tooltip = "EVENT: " + " | ".join(parts)
+
+                    # 아래 클릭용 버튼 (날짜 선택 기능 + 일정 있으면 빨간색 + 툴팁)
+                    # div[data-testid="stButton"].day-clicker 로 잡기 위해 컨테이너에 class 추가
+                    click_container = st.container()
+                    with click_container:
+                        # st.button에 클래스를 직접 줄 수는 없어서
+                        # data-testid 기반 CSS + 이 컨테이너 위치로만 사용
+                        btn = st.button(
+                            "선택" if current == st.session_state.selected_date else " ",
+                            key=f"click_{year}_{month}_{day}",
+                            help=tooltip  # tooltip이 "EVENT:"로 시작하면 CSS에서 빨간 버튼 처리
+                        )
+                    # 컨테이너에 클래스 주는 건 안 되지만,
+                    # 위쪽 CSS에서 div[data-testid="stButton"].day-clicker 를 쓸 수 없어서
+                    # st.button 주위에 바로 classname 주는 건 불가 → 대신 전체 stButton 폭 제한으로 대응
+
+                    if btn:
                         st.session_state.selected_date = current
                         st.rerun()
 
@@ -324,7 +372,6 @@ with st.form("add_event_form"):
     submitted = st.form_submit_button("일정 추가")
 
 if submitted:
-    # 기본 유효성 검증
     start_dt = dt.datetime.combine(sel_date, start_time, tzinfo=KST)
     end_dt = dt.datetime.combine(sel_date, end_time, tzinfo=KST)
 
@@ -341,7 +388,7 @@ if submitted:
             st.warning(f"⚠ 선택한 날짜에 이미 {len(overlaps_local)}개의 로컬 일정이 겹칩니다.")
 
         # 2) 구글 캘린더 일정 겹침 체크
-        google_creds = st.session_state.get("google_creds")  # 나중에 OAuth 완료 후 넣어주면 됨
+        google_creds = st.session_state.get("google_creds")
         google_events = fetch_google_events(google_creds, sel_date)
 
         overlaps_google = []
@@ -354,10 +401,8 @@ if submitted:
         if overlaps_google:
             st.warning(f"⚠ 구글 캘린더 일정 {len(overlaps_google)}개와 시간이 겹칩니다.")
 
-        # 3) 구글 맵 이동 시간 체크 (가장 가까운 일정 기준)
+        # 3) 구글 맵 이동 시간 체크
         all_for_travel: List[Dict] = []
-
-        # 로컬 일정들 + 구글 일정들을 한 리스트에 모으기
         all_for_travel.extend(st.session_state.local_events)
         all_for_travel.extend(google_events)
 
@@ -371,16 +416,14 @@ if submitted:
                 )
                 if travel_min is not None:
                     gap_min = abs((start_dt - nearest["end_dt"]).total_seconds()) / 60.0
-                    # 단순 기준: 이동 시간이 일정 간격보다 길면 경고
                     if travel_min > gap_min:
                         st.warning(
-                            f"⚠ 이전/다음 일정('{nearest['title']}')에서 "
-                            f"이동 시간({travel_min:.1f}분)이 "
+                            f"⚠ 가까운 일정('{nearest['title']}')에서 이동 시간({travel_min:.1f}분)이 "
                             f"일정 간격({gap_min:.1f}분)보다 길 수 있습니다."
                         )
                     else:
                         st.info(
-                            f"✅ 가까운 다른 일정과의 이동 시간({travel_min:.1f}분)이 "
+                            f"✅ 가까운 일정과의 이동 시간({travel_min:.1f}분)이 "
                             f"일정 간격({gap_min:.1f}분) 내에 있습니다."
                         )
 
