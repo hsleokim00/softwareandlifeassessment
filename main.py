@@ -9,34 +9,45 @@ st.set_page_config(
     layout="centered",
 )
 
-# ===== 캘린더 버튼 공통 스타일 + 오늘/선택 날짜 강조 =====
-st.markdown(
-    """
+# ==================== CSS (UI 완전 제어) ====================
+st.markdown("""
 <style>
-/* 모든 버튼 기본 스타일 (특히 캘린더 버튼용) */
-div[data-testid="stButton"] > button {
-    border-radius: 0.7rem;
-    padding-top: 0.6rem;
-    padding-bottom: 0.6rem;
+.calendar-cell {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+    border: 1px solid rgba(255,255,255,0.15);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-size: 1rem;
+    cursor: pointer;
 }
 
-/* 오늘 날짜 버튼: title 속성에 TODAY 포함 */
-button[title*="TODAY"] {
-    border: 2px solid #FFD54F !important;   /* 노란색 테두리 */
+/* 오늘 날짜 강조 */
+.calendar-today {
+    border: 2px solid #FFD54F !important;
 }
 
-/* 선택된 날짜 버튼: title 속성에 SELECTED 포함 */
-button[title*="SELECTED"] {
-    background-color: #4B8DF8 !important;   /* 파란 배경 */
-    color: white !important;                /* 흰 글씨 */
+/* 선택 날짜 강조 */
+.calendar-selected {
+    background-color: #4B8DF8 !important;
+    color: white !important;
+}
+
+/* 빈 칸 */
+.calendar-empty {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+    background-color: rgba(255,255,255,0.03);
 }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
-# ==================== KST(한국 시간) 기준 현재 시각/오늘 날짜 ====================
-KST = dt.timezone(dt.timedelta(hours=9))  # UTC+9
+
+# ==================== KST 기준 시간 ====================
+KST = dt.timezone(dt.timedelta(hours=9))
 now = dt.datetime.now(KST)
 today = now.date()
 
@@ -51,161 +62,110 @@ if "selected_date" not in st.session_state:
     st.session_state.selected_date = today
 
 
-# ==================== 헬퍼 함수들 ====================
-def move_month(delta: int):
-    """delta = +1 → 다음 달, -1 → 이전 달"""
-    year = st.session_state.cal_year
-    month = st.session_state.cal_month
+# ==================== 함수들 ====================
+def move_month(delta):
+    y = st.session_state.cal_year
+    m = st.session_state.cal_month
 
-    month += delta
-    if month <= 0:
-        month += 12
-        year -= 1
-    elif month >= 13:
-        month -= 12
-        year += 1
+    m += delta
+    if m <= 0:
+        m += 12
+        y -= 1
+    elif m >= 13:
+        m -= 12
+        y += 1
 
-    st.session_state.cal_year = year
-    st.session_state.cal_month = month
+    st.session_state.cal_year = y
+    st.session_state.cal_month = m
 
 
-def render_calendar(year: int, month: int):
-    """달력 렌더링 (월요일 시작, 버튼 약간 오른쪽으로 이동)"""
+def render_calendar(year, month):
     st.markdown("### 📅 달력")
 
-    # 상단: 좌/우 이동 + 타이틀
-    col_prev, col_title, col_next = st.columns([1, 3, 1])
-    with col_prev:
-        if st.button("◀", key=f"prev_{year}_{month}"):
-            move_month(-1)
-            st.rerun()
-
-    with col_title:
-        st.markdown(
-            f"<h4 style='text-align:center;'>{year}년 {month}월</h4>",
-            unsafe_allow_html=True,
-        )
-
-    with col_next:
-        if st.button("▶", key=f"next_{year}_{month}"):
-            move_month(1)
-            st.rerun()
+    # 상단 화살표 + 제목
+    c1, c2, c3 = st.columns([1, 3, 1])
+    with c1:
+        if st.button("◀"): move_month(-1); st.rerun()
+    with c2:
+        st.markdown(f"<h4 style='text-align:center;'>{year}년 {month}월</h4>", unsafe_allow_html=True)
+    with c3:
+        if st.button("▶"): move_month(1); st.rerun()
 
     # 요일 헤더
-    weekday_names = ["월", "화", "수", "목", "금", "토", "일"]
+    weekdays = ["월","화","수","목","금","토","일"]
     cols = st.columns(7)
-    for i, name in enumerate(weekday_names):
+    for i, w in enumerate(weekdays):
         with cols[i]:
-            st.markdown(
-                f"<div style='text-align:center; font-weight:600;'>{name}</div>",
-                unsafe_allow_html=True,
-            )
+            st.markdown(f"<div style='text-align:center; font-weight:600;'>{w}</div>", unsafe_allow_html=True)
 
-    # 달력 데이터 (월요일 시작)
+    # 달력 데이터
     cal = calendar.Calendar(firstweekday=0)
-    month_weeks = cal.monthdayscalendar(year, month)
+    weeks = cal.monthdayscalendar(year, month)
 
-    # 날짜/빈 칸 버튼들
-    for week_idx, week in enumerate(month_weeks):
+    # 날짜 출력
+    for w in weeks:
         cols = st.columns(7)
-        for i, day in enumerate(week):
-            with cols[i]:
-                # 안쪽에 작은 두 칸을 만들어서 버튼을 오른쪽으로 살짝 밀기
-                # 비율 [1, 4] 정도로 → 오른쪽으로 조금 치우침
-                inner_left, inner_right = st.columns([1, 4])
-                with inner_right:
-                    if day == 0:
-                        # 이 달에 속하지 않는 칸도 버튼으로 만들어 모양 통일
-                        st.button(
-                            " ",
-                            key=f"empty_{year}_{month}_{week_idx}_{i}",
-                        )
-                    else:
-                        current_date = dt.date(year, month, day)
-                        is_today = (current_date == today)
-                        is_selected = (current_date == st.session_state.selected_date)
+        for idx, day in enumerate(w):
+            with cols[idx]:
+                if day == 0:
+                    # 빈 칸
+                    st.markdown("<div class='calendar-empty'></div>", unsafe_allow_html=True)
+                else:
+                    current = dt.date(year, month, day)
 
-                        tags = []
-                        if is_today:
-                            tags.append("TODAY")
-                        if is_selected:
-                            tags.append("SELECTED")
-                        help_text = ",".join(tags) if tags else None
+                    # 기본 클래스
+                    classes = ["calendar-cell"]
 
-                        if st.button(
-                            f"{day}",
-                            key=f"day_{year}_{month}_{day}",
-                            help=help_text,  # title 속성으로 들어감 → CSS에서 잡아서 강조
-                        ):
-                            st.session_state.selected_date = current_date
+                    if current == today:
+                        classes.append("calendar-today")
+                    if current == st.session_state.selected_date:
+                        classes.append("calendar-selected")
+
+                    class_str = " ".join(classes)
+
+                    # UI 박스 표시
+                    st.markdown(
+                        f"<div class='{class_str}'>{day}</div>",
+                        unsafe_allow_html=True
+                    )
+
+                    # 클릭 이벤트 처리 (투명 버튼)
+                    if st.button(" ", key=f"btn_{year}_{month}_{day}"):
+                        st.session_state.selected_date = current
+                        st.rerun()
 
 
-# ==================== 메인 ====================
-st.title("일정? 바로잡 GO!")
-
-st.caption(f"현재 시각 (KST 기준): {now.strftime('%Y-%m-%d %H:%M:%S')}")
-
-# -------- 연/월/일 드롭다운으로 날짜 바로 이동 --------
+# ==================== 드롭다운 선택 ====================
 st.markdown("### 날짜 선택")
 
-col_y, col_m, col_d = st.columns(3)
+cY, cM, cD = st.columns(3)
 
-year_options = list(range(today.year - 5, today.year + 6))
-current_year = st.session_state.cal_year
-current_month = st.session_state.cal_month
+year_list = list(range(today.year - 5, today.year + 6))
+year_sel = cY.selectbox("연도", year_list, index=year_list.index(st.session_state.cal_year))
+month_sel = cM.selectbox("월", list(range(1,13)), index=st.session_state.cal_month - 1)
+
+days = calendar.monthrange(year_sel, month_sel)[1]
+
 current_sel = st.session_state.selected_date
+default_day = current_sel.day if (current_sel.year == year_sel and current_sel.month == month_sel) else 1
 
-with col_y:
-    year_sel = st.selectbox(
-        "연도",
-        year_options,
-        index=year_options.index(current_year),
-    )
+day_sel = cD.selectbox("일", list(range(1, days+1)), index=default_day - 1)
 
-with col_m:
-    month_sel = st.selectbox(
-        "월",
-        list(range(1, 13)),
-        index=current_month - 1,
-    )
-
-days_in_month = calendar.monthrange(year_sel, month_sel)[1]
-
-default_day = 1
-if (
-    isinstance(current_sel, dt.date)
-    and current_sel.year == year_sel
-    and current_sel.month == month_sel
-    and 1 <= current_sel.day <= days_in_month
-):
-    default_day = current_sel.day
-
-with col_d:
-    day_sel = st.selectbox(
-        "일",
-        list(range(1, days_in_month + 1)),
-        index=default_day - 1,
-    )
-
-# 드롭다운 선택 결과를 세션 상태에 반영
+# 적용
 st.session_state.cal_year = year_sel
 st.session_state.cal_month = month_sel
 st.session_state.selected_date = dt.date(year_sel, month_sel, day_sel)
 
-# -------- 달력 렌더링 --------
+# ==================== 달력 렌더링 ====================
 render_calendar(st.session_state.cal_year, st.session_state.cal_month)
 
-# -------- '오늘' 버튼: 현재 날짜로 이동 --------
+# 오늘 버튼
 st.markdown("---")
-col_today, _ = st.columns([1, 3])
-with col_today:
-    if st.button("오늘로 이동"):
-        st.session_state.cal_year = today.year
-        st.session_state.cal_month = today.month
-        st.session_state.selected_date = today
-        st.rerun()
+if st.button("오늘로 이동"):
+    st.session_state.cal_year = today.year
+    st.session_state.cal_month = today.month
+    st.session_state.selected_date = today
+    st.rerun()
 
-# 선택된 날짜 정보
-st.markdown("### 선택된 날짜")
-sel = st.session_state.selected_date
-st.write(f"**{sel.year}년 {sel.month}월 {sel.day}일** 이(가) 선택되어 있습니다.")
+# 선택된 날짜 표시
+st.write(f"**선택된 날짜:** {st.session_state.selected_date}")
