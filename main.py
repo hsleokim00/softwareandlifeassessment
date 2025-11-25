@@ -144,6 +144,16 @@ if "selected_date" not in st.session_state:
 if "local_events" not in st.session_state:
     st.session_state.local_events: List[Dict] = []
 
+# 경로 미리보기용 상태
+if "preview_origin" not in st.session_state:
+    st.session_state.preview_origin = ""
+if "preview_dest" not in st.session_state:
+    st.session_state.preview_dest = ""
+if "preview_mode" not in st.session_state:
+    st.session_state.preview_mode = None
+if "preview_minutes" not in st.session_state:
+    st.session_state.preview_minutes = None
+
 # ==================== 구글 캘린더 & 맵 연동 함수 ====================
 
 def fetch_google_events(creds, date: dt.date) -> List[Dict]:
@@ -349,6 +359,9 @@ def render_calendar(year: int, month: int):
 st.title("일정? 바로잡 GO!")
 st.caption(f"현재 시각: {now.strftime('%Y-%m-%d %H:%M:%S')} (KST)")
 
+# 전역 MAPS 키
+MAPS_KEY = st.secrets.get("GOOGLE_MAPS_API_KEY", None)
+
 # 날짜 선택 UI
 st.markdown("### 날짜 선택")
 
@@ -417,6 +430,71 @@ with st.form("add_event_form"):
     location = st.text_input("장소(선택)", value="")
     submitted = st.form_submit_button("일정 추가")
 
+# ==================== (1) 두 지점 직접 입력 경로 미리보기 - 일정 입력 칸 바로 아래 ====================
+
+st.markdown("### 경로 미리보기 (두 지점 직접 입력)")
+
+po = st.text_input(
+    "출발지", 
+    value=st.session_state.preview_origin, 
+    key="preview_origin_input"
+)
+pdest = st.text_input(
+    "도착지", 
+    value=st.session_state.preview_dest, 
+    key="preview_dest_input"
+)
+
+if st.button("이 경로 보기", key="preview_route_btn"):
+    st.session_state.preview_origin = po
+    st.session_state.preview_dest = pdest
+    if MAPS_KEY and po and pdest:
+        best = get_best_travel_option(po, pdest, MAPS_KEY)
+        if best:
+            st.session_state.preview_mode = best["mode"]
+            st.session_state.preview_minutes = best["minutes"]
+        else:
+            st.session_state.preview_mode = None
+            st.session_state.preview_minutes = None
+    else:
+        st.session_state.preview_mode = None
+        st.session_state.preview_minutes = None
+
+# 항상 이 자리에서 지도/정보 보여주기 (입력 값이 있으면)
+if MAPS_KEY and st.session_state.preview_origin and st.session_state.preview_dest and st.session_state.preview_mode:
+    mode = st.session_state.preview_mode
+    minutes = st.session_state.preview_minutes
+    origin = st.session_state.preview_origin
+    dest = st.session_state.preview_dest
+
+    st.info(
+        f"**'{origin}' → '{dest}'**\n\n"
+        f"- 추천 교통수단: **{pretty_mode_name(mode)}**\n"
+        f"- 예상 이동 시간: **{minutes:.1f}분**"
+    )
+
+    origin_q = urllib.parse.quote_plus(origin)
+    dest_q = urllib.parse.quote_plus(dest)
+    embed_url = (
+        "https://www.google.com/maps/embed/v1/directions"
+        f"?key={MAPS_KEY}&origin={origin_q}&destination={dest_q}&mode={mode}"
+    )
+    iframe_html = f"""
+        <iframe
+            width="100%"
+            height="360"
+            frameborder="0"
+            style="border:0; border-radius:12px;"
+            src="{embed_url}"
+            allowfullscreen>
+        </iframe>
+    """
+    components.html(iframe_html, height=380)
+elif st.session_state.preview_origin or st.session_state.preview_dest:
+    st.warning("출발지와 도착지, 그리고 유효한 Google Maps API 키가 모두 필요합니다.")
+
+# ==================== (2) 폼 제출 시: 기존 일정 vs 새 일정 위치 비교 + 지도 + 미루기 추천 ====================
+
 if submitted:
     start_dt = dt.datetime.combine(sel_date, start_time, tzinfo=KST)
     end_dt = dt.datetime.combine(sel_date, end_time, tzinfo=KST)
@@ -445,43 +523,38 @@ if submitted:
         elif google_events_today:
             st.info("✅ 이 시간대와 직접적으로 겹치는 구글 일정은 없습니다.")
 
-        # 3) 구글 맵 이동 시간 + 교통수단 + 일정 미루기 추천 + 지도 UI
+        # 3) 구글 맵 이동 시간 + 교통수단 + 일정 미루기 추천 + 지도 UI (기존 일정 vs 새 일정)
         all_events_for_travel: List[Dict] = []
         all_events_for_travel.extend(st.session_state.local_events)
         all_events_for_travel.extend(google_events_today or [])
 
-        maps_key = st.secrets.get("GOOGLE_MAPS_API_KEY", None)
-
-        if location and maps_key and all_events_for_travel:
-            # 가장 가까운 기존 일정 찾기 (시간 기준)
+        if location and MAPS_KEY and all_events_for_travel:
             nearest = find_nearest_event_by_time(all_events_for_travel, start_dt)
 
             if nearest and nearest.get("location"):
                 origin = nearest["location"]
                 dest = location
 
-                best_option = get_best_travel_option(origin, dest, maps_key)
+                best_option = get_best_travel_option(origin, dest, MAPS_KEY)
 
                 if best_option:
                     travel_min = best_option["minutes"]
                     mode = best_option["mode"]
 
-                    # 일정 간 시간 간격 (분)
                     gap_min = abs((start_dt - nearest["end_dt"]).total_seconds()) / 60.0
 
                     st.info(
-                        f"가장 가까운 일정은 **'{nearest['title']}'** "
+                        f"가장 가까운 기존 일정은 **'{nearest['title']}'** "
                         f"({nearest['end_dt'].strftime('%H:%M')} 종료, 장소: {origin}) 입니다.\n\n"
                         f"해당 일정 → 새 일정 장소(**{dest}**) 이동 시\n"
                         f"**{pretty_mode_name(mode)} 기준 예상 이동 시간: {travel_min:.1f}분**"
                     )
 
-                    # 🗺 실제 지도 UI (경로) 임베드
                     origin_q = urllib.parse.quote_plus(origin)
                     dest_q = urllib.parse.quote_plus(dest)
                     embed_url = (
                         "https://www.google.com/maps/embed/v1/directions"
-                        f"?key={maps_key}&origin={origin_q}&destination={dest_q}&mode={mode}"
+                        f"?key={MAPS_KEY}&origin={origin_q}&destination={dest_q}&mode={mode}"
                     )
                     iframe_html = f"""
                         <iframe
@@ -493,7 +566,7 @@ if submitted:
                             allowfullscreen>
                         </iframe>
                     """
-                    st.markdown("### 이동 경로 미리보기")
+                    st.markdown("### 기존 일정 ↔ 새 일정 이동 경로")
                     components.html(iframe_html, height=380)
 
                     # (이동시간)-(일정 사이 시간 간격)+1시간
