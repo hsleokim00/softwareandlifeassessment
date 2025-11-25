@@ -126,6 +126,129 @@ div[data-testid="stButton"] > button {
         font-size: 1.2rem;
     }
 }
+
+/* ===================== 🌙 다크 / ☀ 라이트 모드 자동 감지 ===================== */
+
+/* 🌙 다크 모드 (브라우저/OS가 다크일 때) */
+@media (prefers-color-scheme: dark) {
+    html, body, .main, .main .block-container {
+        background-color: #0d1117 !important;
+        color: #ffffff !important;
+    }
+
+    .calendar-weekday {
+        color: #e6edf3 !important;
+    }
+
+    .calendar-cell {
+        border: 1px solid rgba(240,246,252,0.12) !important;
+        background-color: rgba(240,246,252,0.03) !important;
+        color: #e6edf3 !important;
+    }
+
+    .calendar-empty {
+        background-color: rgba(240,246,252,0.02) !important;
+    }
+
+    .calendar-cell.today {
+        border-color: #FFD54F !important;
+    }
+
+    .calendar-cell.selected {
+        background-color: #4B8DF8 !important;
+        color: #ffffff !important;
+    }
+
+    .calendar-cell.event-day {
+        box-shadow: 0 0 0 2px #ff5252 inset !important;
+    }
+
+    /* 버튼 */
+    div[data-testid="stButton"] > button {
+        background-color: #30363d !important;
+        color: #ffffff !important;
+        border: 1px solid #484f58 !important;
+    }
+
+    /* 입력창 */
+    .stTextInput > div > div > input,
+    .stTextArea textarea {
+        background-color: #161b22 !important;
+        color: #ffffff !important;
+        border: 1px solid #30363d !important;
+    }
+
+    /* 셀렉트박스 */
+    .stSelectbox > div > div {
+        background-color: #161b22 !important;
+        color: #ffffff !important;
+    }
+
+    /* 구분선 색 조금 어둡게 */
+    hr {
+        border-color: #30363d !important;
+    }
+}
+
+/* ☀ 라이트 모드 (브라우저/OS가 라이트일 때) */
+@media (prefers-color-scheme: light) {
+    html, body, .main, .main .block-container {
+        background-color: #ffffff !important;
+        color: #000000 !important;
+    }
+
+    .calendar-weekday {
+        color: #111827 !important;
+    }
+
+    .calendar-cell {
+        border: 1px solid rgba(0,0,0,0.08) !important;
+        background-color: #ffffff !important;
+        color: #111827 !important;
+    }
+
+    .calendar-empty {
+        background-color: rgba(0,0,0,0.03) !important;
+    }
+
+    .calendar-cell.today {
+        border-color: #FFC107 !important;
+    }
+
+    .calendar-cell.selected {
+        background-color: #1976d2 !important;
+        color: #ffffff !important;
+    }
+
+    .calendar-cell.event-day {
+        box-shadow: 0 0 0 2px #f44336 inset !important;
+    }
+
+    /* 버튼 */
+    div[data-testid="stButton"] > button {
+        background-color: #f3f4f6 !important;
+        color: #111827 !important;
+        border: 1px solid #d1d5db !important;
+    }
+
+    /* 입력창 */
+    .stTextInput > div > div > input,
+    .stTextArea textarea {
+        background-color: #ffffff !important;
+        color: #111827 !important;
+        border: 1px solid #d1d5db !important;
+    }
+
+    /* 셀렉트박스 */
+    .stSelectbox > div > div {
+        background-color: #ffffff !important;
+        color: #111827 !important;
+    }
+
+    hr {
+        border-color: #e5e7eb !important;
+    }
+}
 </style>
 """, unsafe_allow_html=True)
 
