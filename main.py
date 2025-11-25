@@ -3,6 +3,8 @@ import datetime as dt
 import calendar
 from typing import List, Dict, Optional
 import requests
+import urllib.parse
+import streamlit.components.v1 as components
 
 # google-api-python-client이 아직 설치 안 되어 있어도 에러 안 나게 처리
 try:
@@ -25,6 +27,11 @@ st.markdown("""
     max-width: 900px;
     padding-top: 1.2rem;
     padding-bottom: 2.5rem;
+}
+
+/* 제목 폰트 조금 줄이기 */
+.main .block-container h1 {
+    font-size: 1.7rem;
 }
 
 /* ---- 달력 격자 전체 ---- */
@@ -83,12 +90,26 @@ st.markdown("""
     box-shadow: 0 0 0 2px #ff5252 inset;
 }
 
-/* 버튼 공통 (오늘 버튼 등) */
+/* 기본 버튼 (오늘 버튼, 폼 버튼 등) */
 div[data-testid="stButton"] > button {
     padding-top: 0.2rem;
     padding-bottom: 0.2rem;
+    padding-left: 0.8rem;
+    padding-right: 0.8rem;
     border-radius: 999px;
     font-size: 0.75rem;
+}
+
+/* 🔵 달력 화살표 전용 스타일 */
+.nav-arrow-row [data-testid="stButton"] > button {
+    width: 44px;
+    height: 44px;
+    padding: 0 !important;
+    border-radius: 999px;
+    font-size: 1.3rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 /* 모바일 최적화 */
@@ -97,6 +118,12 @@ div[data-testid="stButton"] > button {
         width: min(12vw, 48px);
         height: min(12vw, 48px);
         font-size: 0.85rem;
+    }
+
+    .nav-arrow-row [data-testid="stButton"] > button {
+        width: 40px;
+        height: 40px;
+        font-size: 1.2rem;
     }
 }
 </style>
@@ -116,7 +143,6 @@ if "selected_date" not in st.session_state:
     st.session_state.selected_date = today
 if "local_events" not in st.session_state:
     st.session_state.local_events: List[Dict] = []
-
 
 # ==================== 구글 캘린더 & 맵 연동 함수 ====================
 
@@ -167,7 +193,8 @@ def fetch_google_events(creds, date: dt.date) -> List[Dict]:
     return events
 
 
-def estimate_travel_minutes(origin, destination, api_key):
+def estimate_travel_minutes(origin: str, destination: str, api_key: Optional[str], mode: str = "driving") -> Optional[float]:
+    """구글 Distance Matrix API로 특정 교통수단의 이동 시간(분) 추정."""
     if not api_key or not origin or not destination:
         return None
 
@@ -175,7 +202,7 @@ def estimate_travel_minutes(origin, destination, api_key):
     params = {
         "origins": origin,
         "destinations": destination,
-        "mode": "driving",
+        "mode": mode,  # driving, transit, walking, bicycling
         "language": "ko",
         "key": api_key,
     }
@@ -190,11 +217,40 @@ def estimate_travel_minutes(origin, destination, api_key):
         return None
 
 
-def times_overlap(s1, e1, s2, e2):
+def get_best_travel_option(origin: str, destination: str, api_key: Optional[str]) -> Optional[Dict]:
+    """
+    여러 교통수단 중 가장 빨리 도착 가능한 옵션 선택.
+    반환: {"mode": "driving"/"transit"/..., "minutes": float}
+    """
+    modes = ["driving", "transit", "walking", "bicycling"]
+    best: Optional[Dict] = None
+
+    for m in modes:
+        minutes = estimate_travel_minutes(origin, destination, api_key, mode=m)
+        if minutes is None:
+            continue
+        if best is None or minutes < best["minutes"]:
+            best = {"mode": m, "minutes": minutes}
+
+    return best
+
+
+def pretty_mode_name(mode: str) -> str:
+    return {
+        "driving": "자동차",
+        "transit": "대중교통",
+        "walking": "도보",
+        "bicycling": "자전거",
+    }.get(mode, mode)
+
+
+def times_overlap(s1: dt.datetime, e1: dt.datetime, s2: dt.datetime, e2: dt.datetime) -> bool:
+    """두 시간 구간이 겹치는지 여부."""
     return max(s1, s2) < min(e1, e2)
 
 
 def find_nearest_event_by_time(events: List[Dict], target_start: dt.datetime) -> Optional[Dict]:
+    """target_start와 가장 가까운 이벤트 하나."""
     if not events:
         return None
     best = None
@@ -225,7 +281,8 @@ def move_month(delta: int):
 def render_calendar(year: int, month: int):
     st.markdown("### 📅 달력")
 
-    # 상단: 화살표 + 타이틀
+    # 상단: 화살표 + 타이틀 (화살표 전용 래퍼로 감싸기)
+    st.markdown('<div class="nav-arrow-row">', unsafe_allow_html=True)
     c1, c2, c3 = st.columns([1, 3, 1])
     with c1:
         if st.button("◀", key=f"prev_{year}_{month}"):
@@ -237,6 +294,7 @@ def render_calendar(year: int, month: int):
         if st.button("▶", key=f"next_{year}_{month}"):
             move_month(1)
             st.rerun()
+    st.markdown("</div>", unsafe_allow_html=True)
 
     # 달력 데이터
     cal = calendar.Calendar(firstweekday=0)
@@ -309,6 +367,8 @@ st.session_state.cal_year = year_sel
 st.session_state.cal_month = month_sel
 st.session_state.selected_date = dt.date(year_sel, month_sel, day_sel)
 
+sel_date = st.session_state.selected_date
+
 # 달력 렌더링
 render_calendar(st.session_state.cal_year, st.session_state.cal_month)
 
@@ -320,12 +380,35 @@ if st.button("오늘로 이동"):
     st.session_state.selected_date = today
     st.rerun()
 
-sel_date = st.session_state.selected_date
 st.markdown(f"### 선택된 날짜: **{sel_date.year}년 {sel_date.month}월 {sel_date.day}일**")
+
+# ==================== 이 날짜의 구글 캘린더 일정 ====================
+
+st.markdown("## 이 날짜의 구글 캘린더 일정")
+
+google_creds = st.session_state.get("google_creds", None)
+
+if google_creds is None or build is None:
+    st.caption("구글 계정 인증 정보가 없어 구글 캘린더 일정을 불러올 수 없습니다.")
+    google_events_today: List[Dict] = []
+else:
+    try:
+        google_events_today = fetch_google_events(google_creds, sel_date)
+    except Exception as e:
+        st.error(f"구글 캘린더를 불러오는 중 오류가 발생했습니다: {e}")
+        google_events_today = []
+
+if google_events_today:
+    for ev in sorted(google_events_today, key=lambda e: e["start_dt"]):
+        time_str = f"{ev['start_dt'].strftime('%H:%M')} ~ {ev['end_dt'].strftime('%H:%M')}"
+        loc_str = f" · @ {ev['location']}" if ev["location"] else ""
+        st.markdown(f"- **{ev['title']}** ({time_str}){loc_str}")
+else:
+    st.write("표시할 구글 일정이 없습니다.")
 
 # ==================== 일정 추가 폼 ====================
 
-st.markdown("## 일정 추가")
+st.markdown("## 일정 추가 (로컬 + 구글 일정/이동시간 겹침 확인)")
 
 with st.form("add_event_form"):
     title = st.text_input("일정 제목", value="새 일정")
@@ -341,58 +424,108 @@ if submitted:
     if end_dt <= start_dt:
         st.error("종료 시간은 시작 시간보다 늦어야 합니다.")
     else:
+        # 1) 로컬 일정 겹침 체크
         overlaps_local = [
             ev for ev in st.session_state.local_events
             if times_overlap(start_dt, end_dt, ev["start_dt"], ev["end_dt"])
         ]
-
         if overlaps_local:
-            st.warning(f"⚠ 선택 날짜에 {len(overlaps_local)}개의 로컬 일정이 겹칩니다.")
+            st.warning(f"⚠ 선택 날짜에 {len(overlaps_local)}개의 로컬 일정이 시간대가 겹칩니다.")
 
-        google_creds = st.session_state.get("google_creds")
-        google_events = fetch_google_events(google_creds, sel_date)
-
-        overlaps_google = [
-            ev for ev in google_events
-            if times_overlap(start_dt, end_dt, ev["start_dt"], ev["end_dt"])
-        ]
+        # 2) 구글 캘린더 일정 겹침 체크
+        overlaps_google: List[Dict] = []
+        if google_events_today:
+            overlaps_google = [
+                ev for ev in google_events_today
+                if times_overlap(start_dt, end_dt, ev["start_dt"], ev["end_dt"])
+            ]
 
         if overlaps_google:
-            st.warning(f"⚠ 구글 일정 {len(overlaps_google)}개와 시간이 겹칩니다.")
-        elif google_events:
-            st.info("✅ 구글 캘린더 일정과 직접 겹치는 시간대는 없습니다.")
+            st.warning(f"⚠ 구글 캘린더 일정 {len(overlaps_google)}개와 시간이 겹칩니다.")
+        elif google_events_today:
+            st.info("✅ 이 시간대와 직접적으로 겹치는 구글 일정은 없습니다.")
+
+        # 3) 구글 맵 이동 시간 + 교통수단 + 일정 미루기 추천 + 지도 UI
+        all_events_for_travel: List[Dict] = []
+        all_events_for_travel.extend(st.session_state.local_events)
+        all_events_for_travel.extend(google_events_today or [])
 
         maps_key = st.secrets.get("GOOGLE_MAPS_API_KEY", None)
-        all_events = st.session_state.local_events + google_events
 
-        if location and maps_key and all_events:
-            nearest = find_nearest_event_by_time(all_events, start_dt)
+        if location and maps_key and all_events_for_travel:
+            # 가장 가까운 기존 일정 찾기 (시간 기준)
+            nearest = find_nearest_event_by_time(all_events_for_travel, start_dt)
+
             if nearest and nearest.get("location"):
-                travel_min = estimate_travel_minutes(nearest["location"], location, maps_key)
-                if travel_min is not None:
-                    gap = abs((start_dt - nearest["end_dt"]).total_seconds()) / 60
-                    if travel_min > gap:
+                origin = nearest["location"]
+                dest = location
+
+                best_option = get_best_travel_option(origin, dest, maps_key)
+
+                if best_option:
+                    travel_min = best_option["minutes"]
+                    mode = best_option["mode"]
+
+                    # 일정 간 시간 간격 (분)
+                    gap_min = abs((start_dt - nearest["end_dt"]).total_seconds()) / 60.0
+
+                    st.info(
+                        f"가장 가까운 일정은 **'{nearest['title']}'** "
+                        f"({nearest['end_dt'].strftime('%H:%M')} 종료, 장소: {origin}) 입니다.\n\n"
+                        f"해당 일정 → 새 일정 장소(**{dest}**) 이동 시\n"
+                        f"**{pretty_mode_name(mode)} 기준 예상 이동 시간: {travel_min:.1f}분**"
+                    )
+
+                    # 🗺 실제 지도 UI (경로) 임베드
+                    origin_q = urllib.parse.quote_plus(origin)
+                    dest_q = urllib.parse.quote_plus(dest)
+                    embed_url = (
+                        "https://www.google.com/maps/embed/v1/directions"
+                        f"?key={maps_key}&origin={origin_q}&destination={dest_q}&mode={mode}"
+                    )
+                    iframe_html = f"""
+                        <iframe
+                            width="100%"
+                            height="360"
+                            frameborder="0"
+                            style="border:0; border-radius:12px;"
+                            src="{embed_url}"
+                            allowfullscreen>
+                        </iframe>
+                    """
+                    st.markdown("### 이동 경로 미리보기")
+                    components.html(iframe_html, height=380)
+
+                    # (이동시간)-(일정 사이 시간 간격)+1시간
+                    extra_min = travel_min - gap_min + 60.0
+                    if extra_min > 0:
+                        new_start_dt = start_dt + dt.timedelta(minutes=extra_min)
                         st.warning(
-                            f"⚠ 가까운 일정('{nearest['title']}')에서 이동 시간({travel_min:.1f}분)이 "
-                            f"일정 간격({gap:.1f}분)보다 길 수 있습니다."
+                            "이동 여유 시간을 고려하면 현재 일정 시작 시간으로는 부족할 수 있습니다.\n\n"
+                            f"- 이동시간: **{travel_min:.1f}분**\n"
+                            f"- 일정 사이 간격: **{gap_min:.1f}분**\n"
+                            f"- 추가 여유 1시간 포함 필요 분: **{extra_min:.1f}분**\n\n"
+                            f"➡ **새 일정 시작 시간을 {new_start_dt.strftime('%H:%M')} 이후로 미루는 것을 추천합니다.**"
                         )
                     else:
                         st.info(
-                            f"✅ 가까운 일정과의 이동 시간({travel_min:.1f}분)이 "
-                            f"일정 간격({gap:.1f}분) 내에 있습니다."
+                            "이동시간과 1시간 여유를 고려해도 현재 일정 시작 시간으로 충분합니다."
                         )
 
-        st.session_state.local_events.append({
+        # 4) 로컬 일정 저장
+        new_event = {
             "id": len(st.session_state.local_events) + 1,
             "title": title,
             "start_dt": start_dt,
             "end_dt": end_dt,
             "location": location,
             "source": "local",
-        })
-        st.success("일정이 추가되었습니다!")
+        }
+        st.session_state.local_events.append(new_event)
+        st.success("일정이 추가되었습니다.")
 
-# ==================== 선택 날짜 일정 목록 표시 ====================
+# ==================== 선택 날짜의 로컬 일정 표시 ====================
+
 st.markdown("## 이 날짜의 로컬 일정")
 
 events_today = [
