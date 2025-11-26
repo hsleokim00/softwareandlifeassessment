@@ -18,7 +18,7 @@ except ImportError:
 
 # 🔹 네 구글 캘린더(김현서) 캘린더 ID
 #    보통 본인 gmail 주소 그대로 쓰면 됨 (예: "dlspike520@gmail.com")
-CALENDAR_ID = "dlspike520@gmail.com"
+CALENDAR_ID = "YOUR_GMAIL_ADDRESS_HERE"
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
@@ -188,6 +188,7 @@ def parse_iso_or_date(s: str) -> dt.datetime:
     st.write("[DEBUG] parse_iso_or_date 실패:", s)
     raise ValueError(f"지원하지 않는 날짜 형식: {s}")
 
+
 def format_event_time_str(start_raw: str, end_raw: str) -> str:
     try:
         start_dt = parse_iso_or_date(start_raw)
@@ -260,6 +261,14 @@ def get_travel_time_minutes(
     try:
         resp = requests.get(url, params=params, timeout=5)
         data = resp.json()
+
+        # top-level status 디버그
+        st.write(
+            "[DEBUG] Distance Matrix top-level status:",
+            data.get("status"),
+            data.get("error_message"),
+        )
+
         rows = data.get("rows", [])
         if not rows:
             return None
@@ -531,7 +540,7 @@ else:
         else:
             st.info("아직 새 일정이 없습니다. 위에서 일정을 하나 추가해 주세요.")
 
-        if st.session_state.last_added_event and base_event:
+    if st.session_state.last_added_event and base_event:
         base_loc_text = base_event["location"]
         new_loc_text = st.session_state.last_added_event["location"]
 
@@ -603,9 +612,3 @@ else:
                 st.info(
                     "이동 시간 또는 일정 간 간격 정보를 충분히 얻지 못해, 텍스트 추천은 생략합니다."
                 )
-
-
-st.write("[DEBUG] origin_param =", origin_param)
-st.write("[DEBUG] dest_param   =", dest_param)
-st.write("[DEBUG] travel_min   =", travel_min)
-st.write("[DEBUG] gap_min      =", gap_min)
