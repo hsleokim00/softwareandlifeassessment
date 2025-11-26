@@ -13,6 +13,15 @@ except ImportError:
     build = None
     service_account = None
 
+service, err = get_calendar_service()
+if err:
+    st.error(f"[DEBUG] Calendar Auth Error: {err}")
+else:
+    try:
+        events = fetch_google_events(service)
+        st.write(f"[DEBUG] 불러온 이벤트 개수: {len(events)}")
+    except Exception as e:
+        st.error(f"[DEBUG] fetch_google_events ERROR: {e}")
 
 # ==================== 기본 설정 ====================
 st.set_page_config(
