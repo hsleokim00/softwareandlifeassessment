@@ -547,6 +547,8 @@ else:
 st.markdown("## 일정 추가 (로컬 + 구글 일정/이동시간 겹침 확인)")
 
 with st.form("add_event_form"):
+    # 🔹 폼 내 날짜 선택 추가 (기본값은 현재 선택된 달력 날짜)
+    event_date = st.date_input("날짜", value=sel_date)
     title = st.text_input("일정 제목", value="새 일정")
     start_time = st.time_input("시작 시간", value=dt.time(9, 0))
     end_time = st.time_input("종료 시간", value=dt.time(10, 0))
@@ -619,8 +621,9 @@ elif st.session_state.preview_origin or st.session_state.preview_dest:
 # ==================== (2) 폼 제출 시: 기존 일정 vs 새 일정 위치 비교 + 지도 + 미루기 추천 ====================
 
 if submitted:
-    start_dt = dt.datetime.combine(sel_date, start_time, tzinfo=KST)
-    end_dt = dt.datetime.combine(sel_date, end_time, tzinfo=KST)
+    # 🔹 여기서도 sel_date 대신 폼에서 받은 event_date 사용
+    start_dt = dt.datetime.combine(event_date, start_time, tzinfo=KST)
+    end_dt = dt.datetime.combine(event_date, end_time, tzinfo=KST)
 
     if end_dt <= start_dt:
         st.error("종료 시간은 시작 시간보다 늦어야 합니다.")
@@ -635,6 +638,7 @@ if submitted:
 
         # 2) 구글 캘린더 일정 겹침 체크
         overlaps_google: List[Dict] = []
+        # 구글 일정은 지금 화면에서 선택된 sel_date 기준으로 가져온 상태임
         if google_events_today:
             overlaps_google = [
                 ev for ev in google_events_today
