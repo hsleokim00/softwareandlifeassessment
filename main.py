@@ -13,6 +13,7 @@ except ImportError:
     build = None
     service_account = None
 
+
 # ==================== 기본 설정 ====================
 st.set_page_config(
     page_title="일정? 바로잡 GO!",
@@ -104,14 +105,22 @@ def get_calendar_service():
     except Exception as e:
         return None, f"서비스 계정 인증 중 오류가 발생했습니다: {e}"
 
-def fetch_google_events(service, calendar_id: str = "primary", max_results: int = 20):
-    """다가오는 Google Calendar 일정 불러오기"""
-    now = dt.datetime.utcnow().isoformat() + "Z"
+def fetch_google_events(service, calendar_id: str = "primary", max_results: int = 50):
+    """
+    한국 시간 기준 '오늘 0시(KST)' 이후의 모든 일정 불러오기.
+    Google Calendar API는 UTC 기준이므로, KST→UTC 변환 후 timeMin으로 사용.
+    """
+    # 한국 시간 기준 오늘 0시
+    kst_today = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    # UTC로 변환 (KST = UTC+9)
+    utc_today = kst_today - dt.timedelta(hours=9)
+    time_min = utc_today.isoformat() + "Z"
+
     events_result = (
         service.events()
         .list(
             calendarId=calendar_id,
-            timeMin=now,
+            timeMin=time_min,
             maxResults=max_results,
             singleEvents=True,
             orderBy="startTime",
@@ -278,14 +287,15 @@ def render_directions_map(origin: str, destination: str, mode: str = "transit", 
 # ==================== UI 시작 ====================
 st.title("📅 일정? 바로잡 GO!")
 st.markdown(
-    "<p class='subtle'>Google Calendar의 일정 위치와 내가 새로 추가한 일정의 위치를 비교해서, "
-    "실제로 이동 가능한지 지도와 시간으로 확인해 봅니다. 주소 자동완성(Places)도 일정 입력창 안에서 작동합니다.</p>",
+    "<p class='subtle'>Google Calendar의 <b>오늘 이후 일정들</b>을 불러와서, "
+    "내가 새로 추가한 일정과 거리·이동시간을 비교해 줍니다. "
+    "주소 자동완성(Places)은 일정 입력창 안에서 바로 작동합니다.</p>",
     unsafe_allow_html=True,
 )
 
 
-# ---------- 1. 캘린더 일정 불러오기 + 간단 달력 ----------
-st.markdown("### 1. Google Calendar 연동 & 달력 보기")
+# ---------- 1. 캘린더 일정 불러오기 + 달력 ----------
+st.markdown("### 1. Google Calendar 연동 & 달력 보기 (오늘 이후 일정)")
 
 col_btn, col_calendar = st.columns([1, 2])
 
@@ -300,40 +310,14 @@ with col_btn:
             try:
                 events = fetch_google_events(service, calendar_id="primary")
                 st.session_state.google_events = events
-                st.success(f"다가오는 일정 {len(events)}개를 불러왔습니다.")
+                st.success(f"오늘 이후 일정 {len(events)}개를 불러왔습니다.")
             except Exception as e:
                 st.error(f"캘린더 이벤트를 불러오는 중 오류가 발생했습니다: {e}")
-
-        # --------------------- DEBUG ---------------------
-    st.markdown("### 🐞 DEBUG (Google Calendar 상태 확인)")
-
-    # 1) 서비스 계정 인증 체크
-    svc, err = get_calendar_service()
-    if err:
-        st.error(f"[DEBUG] Calendar Auth Error: {err}")
-    elif not svc:
-        st.error("[DEBUG] Calendar Service 생성 불가 (svc=None)")
-    else:
-        st.success("[DEBUG] Calendar 인증 성공: 서비스 계정 인증 OK")
-
-        # 2) 실제 fetch 테스트
-        try:
-            debug_events = fetch_google_events(svc)
-            st.info(f"[DEBUG] 불러온 이벤트 개수: {len(debug_events)}")
-
-            # 일부 데이터도 보여줌
-            if debug_events:
-                st.write("[DEBUG] 첫 번째 이벤트 샘플:", debug_events[0])
-            else:
-                st.warning("[DEBUG] 이벤트는 0개입니다 (인증 OK + API OK → 데이터가 과거일 수 있음)")
-        except Exception as e:
-            st.error(f"[DEBUG] fetch_google_events ERROR: {e}")
-
 
 with col_calendar:
     today = dt.date.today()
     selected_date = st.date_input("달력에서 날짜 보기 (기존 달력 UI)", value=today)
-    # 선택한 날짜 기준으로 그 날 일정만 필터해서 보여줌
+    # 선택한 날짜 기준으로 그 날 일정만 필터
     day_events = []
     for ev in st.session_state.google_events:
         try:
@@ -356,7 +340,7 @@ with col_calendar:
 
 # 전체 다가오는 일정 목록
 if st.session_state.google_events:
-    with st.expander("📆 전체 다가오는 일정 목록 보기", expanded=False):
+    with st.expander("📆 오늘 이후 전체 일정 목록 보기", expanded=False):
         for ev in st.session_state.google_events:
             line = f"**{ev['summary']}**  \n"
             line += f"⏰ {format_event_time_str(ev['start_raw'], ev['end_raw'])}"
@@ -380,7 +364,6 @@ with st.form("add_event_form"):
     start_time = st.time_input("시작 시간", value=dt.time(15, 0), key="new_event_start")
     end_time = st.time_input("끝나는 시간", value=dt.time(16, 0), key="new_event_end")
 
-    # 👉 여기 한 칸 안에서 자동완성까지 처리
     loc_input = st.text_input(
         "일정 장소 (입력하면 아래에 주소 자동완성 결과가 뜹니다)",
         placeholder="예) 서울시청, 강남역 2번출구 등",
@@ -416,7 +399,6 @@ with st.form("add_event_form"):
         if not title.strip():
             st.warning("일정 제목은 반드시 입력해 주세요.")
         else:
-            # 자동완성에서 선택된 게 있으면 그 주소/place_id 사용
             if selected_desc:
                 final_location = selected_desc
                 final_place_id = selected_place_id
@@ -435,7 +417,7 @@ with st.form("add_event_form"):
             }
             st.session_state.custom_events.append(new_event)
             st.session_state.last_added_event = new_event
-            st.success("새 일정을 화면 내 목록에 추가했습니다. (캘린더에는 쓰지 않습니다.)")
+            st.success("새 일정을 화면 내 목록에 추가했습니다. (Google Calendar에는 쓰지 않습니다.)")
 
 # 방금 추가한 일정 위치 지도
 if st.session_state.last_added_event and st.session_state.last_added_event.get("location"):
@@ -509,18 +491,15 @@ else:
             st.write(f"도착(새 일정): {new_loc_text}")
             render_directions_map(base_loc_text, new_loc_text, mode=mode_value)
 
-            # Distance Matrix 파라미터
             origin_param = base_loc_text
             dest_param = new_loc_text
 
-            # 새 일정 place_id가 있으면 사용
             new_place_id = st.session_state.last_added_event.get("place_id")
             if new_place_id:
                 dest_param = f"place_id:{new_place_id}"
 
             travel_min = get_travel_time_minutes(origin_param, dest_param, mode=mode_value)
 
-            # 일정 간 간격
             try:
                 base_end_dt = parse_iso_or_date(base_event["end_raw"])
                 new_start_dt = dt.datetime.combine(
@@ -545,7 +524,7 @@ else:
 
             if (travel_min is not None) and (gap_min is not None):
                 buffer = gap_min - travel_min
-                need_extra = 60 - buffer  # 1시간 여유를 위해 필요한 추가 시간
+                need_extra = 60 - buffer  # 1시간 여유 기준
 
                 if buffer >= 60:
                     st.success(
