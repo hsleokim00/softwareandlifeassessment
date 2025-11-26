@@ -171,7 +171,7 @@ def parse_iso_or_date(s: str) -> dt.datetime:
     if s.endswith("Z"):
         s = s.replace("Z", "+00:00")
 
-    # 1) full ISO (예: 2025-11-27T05:30:00+09:00, 2025-11-27T20:00:00+00:00)
+    # 1) full ISO (예: 2025-11-27T06:30:00+09:00)
     try:
         return dt.datetime.fromisoformat(s)
     except Exception:
@@ -568,7 +568,7 @@ else:
                 origin_param, dest_param, mode=mode_value
             )
 
-            # 🔍 일정 간 간격 계산 (타임존 aware/naive 섞임 방지)
+            # 🔍 일정 간 간격 계산 (타임존 꼬임 없이)
             try:
                 base_end_dt = parse_iso_or_date(base_event["end_raw"])
                 new_start_dt = dt.datetime.combine(
@@ -576,9 +576,9 @@ else:
                     st.session_state.last_added_event["start_time"],
                 )
 
-                # base_end_dt 를 naive 로 맞추기
+                # tzinfo만 떼고 시각은 그대로 유지 (KST 06:30 -> naive 06:30)
                 if base_end_dt.tzinfo is not None:
-                    base_end_dt_naive = base_end_dt.astimezone().replace(tzinfo=None)
+                    base_end_dt_naive = base_end_dt.replace(tzinfo=None)
                 else:
                     base_end_dt_naive = base_end_dt
 
