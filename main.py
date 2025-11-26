@@ -105,14 +105,16 @@ def get_calendar_service():
     except Exception as e:
         return None, f"서비스 계정 인증 중 오류가 발생했습니다: {e}"
 
+import datetime as dt
+# 맨 위에 이미 dt 임포트 되어 있으니까 그대로 사용하면 돼
+
 def fetch_google_events(service, calendar_id: str = "primary", max_results: int = 50):
     """
     한국 시간 기준 '오늘 0시(KST)' 이후의 모든 일정 불러오기.
-    Google Calendar API는 UTC 기준이므로, KST→UTC 변환 후 timeMin으로 사용.
     """
-    # 한국 시간 기준 오늘 0시
+    # 🔹 한국 시간 기준 오늘 0시
     kst_today = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    # UTC로 변환 (KST = UTC+9)
+    # 🔹 KST(UTC+9)를 UTC로 변환
     utc_today = kst_today - dt.timedelta(hours=9)
     time_min = utc_today.isoformat() + "Z"
 
@@ -120,7 +122,7 @@ def fetch_google_events(service, calendar_id: str = "primary", max_results: int 
         service.events()
         .list(
             calendarId=calendar_id,
-            timeMin=time_min,
+            timeMin=time_min,          # ← 여기만 이 값 쓰도록
             maxResults=max_results,
             singleEvents=True,
             orderBy="startTime",
