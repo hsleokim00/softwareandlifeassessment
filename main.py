@@ -547,7 +547,7 @@ else:
 st.markdown("## 일정 추가 (로컬 + 구글 일정/이동시간 겹침 확인)")
 
 with st.form("add_event_form"):
-    # 🔹 폼 내 날짜 선택 추가 (기본값은 현재 선택된 달력 날짜)
+    # 폼 내 날짜 선택 (기본값은 현재 선택된 달력 날짜)
     event_date = st.date_input("날짜", value=sel_date)
     title = st.text_input("일정 제목", value="새 일정")
     start_time = st.time_input("시작 시간", value=dt.time(9, 0))
@@ -560,49 +560,26 @@ with st.form("add_event_form"):
 st.markdown("### 경로 미리보기 (두 지점 직접 입력)")
 
 po = st.text_input(
-    "출발지", 
-    value=st.session_state.preview_origin, 
+    "출발지",
+    value=st.session_state.preview_origin,
     key="preview_origin_input"
 )
 pdest = st.text_input(
-    "도착지", 
-    value=st.session_state.preview_dest, 
+    "도착지",
+    value=st.session_state.preview_dest,
     key="preview_dest_input"
 )
 
-if st.button("이 경로 보기", key="preview_route_btn"):
-    st.session_state.preview_origin = po
-    st.session_state.preview_dest = pdest
-    if MAPS_KEY and po and pdest:
-        best = get_best_travel_option(po, pdest, MAPS_KEY)
-        if best:
-            st.session_state.preview_mode = best["mode"]
-            st.session_state.preview_minutes = best["minutes"]
-        else:
-            st.session_state.preview_mode = None
-            st.session_state.preview_minutes = None
-    else:
-        st.session_state.preview_mode = None
-        st.session_state.preview_minutes = None
+# 입력칸 바로 아래에서 항상 지도/경로 보여주기
+if MAPS_KEY and po and pdest:
+    # 지도 모드는 세션에서 저장된 추천 모드가 있으면 그걸, 없으면 driving
+    mode_for_map = st.session_state.preview_mode or "driving"
 
-# 항상 이 자리에서 지도/정보 보여주기 (입력 값이 있으면)
-if MAPS_KEY and st.session_state.preview_origin and st.session_state.preview_dest and st.session_state.preview_mode:
-    mode = st.session_state.preview_mode
-    minutes = st.session_state.preview_minutes
-    origin = st.session_state.preview_origin
-    dest = st.session_state.preview_dest
-
-    st.info(
-        f"**'{origin}' → '{dest}'**\n\n"
-        f"- 추천 교통수단: **{pretty_mode_name(mode)}**\n"
-        f"- 예상 이동 시간: **{minutes:.1f}분**"
-    )
-
-    origin_q = urllib.parse.quote_plus(origin)
-    dest_q = urllib.parse.quote_plus(dest)
+    origin_q = urllib.parse.quote_plus(po)
+    dest_q = urllib.parse.quote_plus(pdest)
     embed_url = (
         "https://www.google.com/maps/embed/v1/directions"
-        f"?key={MAPS_KEY}&origin={origin_q}&destination={dest_q}&mode={mode}"
+        f"?key={MAPS_KEY}&origin={origin_q}&destination={dest_q}&mode={mode_for_map}"
     )
     iframe_html = f"""
         <iframe
@@ -615,13 +592,33 @@ if MAPS_KEY and st.session_state.preview_origin and st.session_state.preview_des
         </iframe>
     """
     components.html(iframe_html, height=380)
-elif st.session_state.preview_origin or st.session_state.preview_dest:
-    st.warning("출발지와 도착지, 그리고 유효한 Google Maps API 키가 모두 필요합니다.")
+
+elif (po or pdest) and not MAPS_KEY:
+    st.warning("유효한 Google Maps API 키가 필요합니다.")
+
+# 버튼은 "최적 교통수단 + 예상 이동시간" 계산용
+if st.button("이 경로 보기", key="preview_route_btn"):
+    st.session_state.preview_origin = po
+    st.session_state.preview_dest = pdest
+
+    if MAPS_KEY and po and pdest:
+        best = get_best_travel_option(po, pdest, MAPS_KEY)
+        if best:
+            st.session_state.preview_mode = best["mode"]
+            st.session_state.preview_minutes = best["minutes"]
+            st.info(
+                f"**'{po}' → '{pdest}'**\n\n"
+                f"- 추천 교통수단: **{pretty_mode_name(best['mode'])}**\n"
+                f"- 예상 이동 시간: **{best['minutes']:.1f}분**"
+            )
+        else:
+            st.warning("이 경로에 대한 이동 시간을 계산할 수 없습니다.")
+    else:
+        st.warning("출발지와 도착지를 모두 입력하고, 유효한 Google Maps API 키를 설정해야 합니다.")
 
 # ==================== (2) 폼 제출 시: 기존 일정 vs 새 일정 위치 비교 + 지도 + 미루기 추천 ====================
 
 if submitted:
-    # 🔹 여기서도 sel_date 대신 폼에서 받은 event_date 사용
     start_dt = dt.datetime.combine(event_date, start_time, tzinfo=KST)
     end_dt = dt.datetime.combine(event_date, end_time, tzinfo=KST)
 
@@ -638,7 +635,6 @@ if submitted:
 
         # 2) 구글 캘린더 일정 겹침 체크
         overlaps_google: List[Dict] = []
-        # 구글 일정은 지금 화면에서 선택된 sel_date 기준으로 가져온 상태임
         if google_events_today:
             overlaps_google = [
                 ev for ev in google_events_today
