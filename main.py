@@ -171,13 +171,13 @@ def parse_iso_or_date(s: str) -> dt.datetime:
     if s.endswith("Z"):
         s = s.replace("Z", "+00:00")
 
-    # 1) full ISO (2025-11-27T05:30:00+09:00 같은 형태)
+    # 1) full ISO (예: 2025-11-27T05:30:00+09:00, 2025-11-27T20:00:00+00:00)
     try:
         return dt.datetime.fromisoformat(s)
     except Exception:
         pass
 
-    # 2) date-only (2025-11-27 같은 종일 일정)
+    # 2) date-only (예: 2025-11-27 같은 종일 일정)
     try:
         d = dt.date.fromisoformat(s)
         return dt.datetime.combine(d, dt.time.min)
@@ -531,7 +531,7 @@ else:
         else:
             st.info("아직 새 일정이 없습니다. 위에서 일정을 하나 추가해 주세요.")
 
-    if st.session_state.last_added_event and base_event:
+        if st.session_state.last_added_event and base_event:
         base_loc_text = base_event["location"]
         new_loc_text = st.session_state.last_added_event["location"]
 
@@ -550,19 +550,25 @@ else:
             if new_place_id:
                 dest_param = f"place_id:{new_place_id}"
 
+            # 🔍 Distance Matrix 요청 + 디버그
             travel_min = get_travel_time_minutes(
                 origin_param, dest_param, mode=mode_value
             )
 
-           base_end_dt = parse_iso_or_date(base_event["end_raw"])
-    new_start_dt = dt.datetime.combine(
-        st.session_state.last_added_event["date"],
-        st.session_state.last_added_event["start_time"],
-    )
-    gap_min = (new_start_dt - base_end_dt).total_seconds() / 60.0
+            # 🔍 일정 간 간격 계산 + 디버그
+            base_end_dt = parse_iso_or_date(base_event["end_raw"])
+            new_start_dt = dt.datetime.combine(
+                st.session_state.last_added_event["date"],
+                st.session_state.last_added_event["start_time"],
+            )
+            gap_min = (new_start_dt - base_end_dt).total_seconds() / 60.0
 
-    st.write("[DEBUG] base_end_dt:", base_end_dt, "new_start_dt:", new_start_dt, "gap_min:", gap_min)
-
+            st.write("[DEBUG] origin_param =", origin_param)
+            st.write("[DEBUG] dest_param   =", dest_param)
+            st.write("[DEBUG] travel_min   =", travel_min)
+            st.write("[DEBUG] base_end_dt  =", base_end_dt)
+            st.write("[DEBUG] new_start_dt =", new_start_dt)
+            st.write("[DEBUG] gap_min      =", gap_min)
 
             st.markdown("#### ⏱ 이동 시간 vs 일정 간 간격")
 
@@ -597,6 +603,7 @@ else:
                 st.info(
                     "이동 시간 또는 일정 간 간격 정보를 충분히 얻지 못해, 텍스트 추천은 생략합니다."
                 )
+
 
 st.write("[DEBUG] origin_param =", origin_param)
 st.write("[DEBUG] dest_param   =", dest_param)
