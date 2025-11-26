@@ -14,38 +14,109 @@ except ImportError:
 
 
 # ==================== 캘린더 ID ====================
-CALENDAR_ID = "dlspike520@gmail.com"   # ← 반드시 Gmail 주소로 변경
+CALENDAR_ID = "YOUR_GMAIL_ADDRESS_HERE"   # ← Gmail로 변경
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
 
-# ==================== Streamlit UI 설정 ====================
+# ==================== Streamlit 기본 설정 ====================
 st.set_page_config(
     page_title="일정? 바로잡 GO!",
     page_icon="📅",
     layout="centered",
 )
 
+# ==================== 네이티브 앱 스타일 CSS ====================
 st.markdown("""
 <style>
-.main .block-container {
-    max-width: 900px;
-    padding-top: 1.2rem;
-    padding-bottom: 2.5rem;
+
+:root {
+    --mint: #36CFC9;
+    --mint-light: #8ef0ec;
+    --text-dark: #222;
+    --bg-light: #f8fffe;
 }
-.stButton > button {
-    border-radius: 999px;
-    padding: 0.4rem 1.4rem;
+
+/* 전체 배경 */
+body {
+    background-color: var(--bg-light);
+}
+
+/* 상단 AppBar */
+.appbar {
+    position: sticky;
+    top: 0;
+    background-color: white;
+    padding: 0.9rem 1.2rem;
+    font-size: 1.3rem;
     font-weight: 600;
-    border: 1px solid #ddd;
+    color: var(--mint);
+    box-shadow: 0 1px 4px rgba(0,0,0,0.07);
+    z-index: 50;
+    border-bottom: 2px solid var(--mint-light);
+    border-radius: 0 0 14px 14px;
 }
-.card {
-    padding: 1rem 1.2rem;
-    border-radius: 0.8rem;
-    border: 1px solid #e5e5e5;
-    background: #fafafa;
-    margin-bottom: 1rem;
+
+/* Section Sheet */
+.sheet {
+    margin-top: 1.2rem;
+    padding: 1.4rem 1.4rem;
+    background: white;
+    border-radius: 14px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.06);
 }
+
+/* 버튼 */
+.stButton > button {
+    background-color: var(--mint);
+    color: white;
+    border-radius: 14px;
+    border: none;
+    padding: 0.7rem 1.5rem;
+    font-weight: 600;
+    width: 100%;
+    font-size: 1.05rem;
+    transition: 0.15s ease-in-out;
+}
+
+.stButton > button:hover {
+    background-color: var(--mint-light);
+    color: #004443;
+}
+
+/* 입력창 */
+.stTextInput > div > div > input,
+.stTextArea > div > textarea,
+.stDateInput > div > input,
+.stTimeInput > div > input {
+    border-radius: 12px !important;
+    border: 1.8px solid #d6d6d6 !important;
+}
+
+.stTextInput > div > div > input:focus-visible {
+    border-color: var(--mint) !important;
+}
+
+/* 지도 iframe 반응형 */
+.mapframe {
+    width: 100%;
+    border-radius: 14px;
+    border: none;
+}
+
+/* 모바일 최적화 */
+@media (max-width: 640px) {
+    .sheet {
+        padding: 1.0rem 1.0rem;
+    }
+    .appbar {
+        font-size: 1.2rem;
+    }
+    iframe {
+        height: 260px !important;
+    }
+}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -79,8 +150,7 @@ def get_calendar_service():
         creds = service_account.Credentials.from_service_account_info(
             info, scopes=SCOPES
         )
-        service = build("calendar", "v3", credentials=creds)
-        return service, None
+        return build("calendar", "v3", credentials=creds), None
     except Exception as e:
         return None, f"Calendar 인증 오류: {e}"
 
@@ -121,9 +191,6 @@ def fetch_google_events(service, calendar_id=CALENDAR_ID, max_results=50):
 
 # ==================== 날짜 처리 ====================
 def parse_iso_or_date(s: str) -> dt.datetime:
-    if not s:
-        raise ValueError()
-
     s = s.strip()
     if s.endswith("Z"):
         s = s.replace("Z", "+00:00")
@@ -131,18 +198,13 @@ def parse_iso_or_date(s: str) -> dt.datetime:
     try:
         return dt.datetime.fromisoformat(s)
     except:
-        pass
-
-    try:
         d = dt.date.fromisoformat(s)
         return dt.datetime.combine(d, dt.time.min)
-    except:
-        raise ValueError("지원하지 않는 날짜 형식")
 
 
-def format_event_time_str(start_raw, end_raw):
-    s = parse_iso_or_date(start_raw)
-    e = parse_iso_or_date(end_raw)
+def format_event_time_str(start, end):
+    s = parse_iso_or_date(start)
+    e = parse_iso_or_date(end)
     if s.date() == e.date():
         return f"{s.strftime('%Y-%m-%d %H:%M')} ~ {e.strftime('%H:%M')}"
     return f"{s.strftime('%Y-%m-%d %H:%M')} ~ {e.strftime('%Y-%m-%d %H:%M')}"
@@ -161,20 +223,13 @@ def places_autocomplete(text: str):
         "language": "ko",
         "components": "country:kr",
     }
-
-    try:
-        data = requests.get(url, params=params, timeout=5).json()
-        if data.get("status") != "OK":
-            return []
-        return [
-            {
-                "description": p.get("description", ""),
-                "place_id": p.get("place_id"),
-            }
-            for p in data.get("predictions", [])
-        ]
-    except:
+    data = requests.get(url, params=params).json()
+    if data.get("status") != "OK":
         return []
+    return [
+        {"description": p.get("description"), "place_id": p.get("place_id")}
+        for p in data.get("predictions", [])
+    ]
 
 
 # ==================== Distance Matrix ====================
@@ -191,20 +246,19 @@ def get_travel_time_minutes(origin, dest, mode="transit"):
         "units": "metric",
         "key": key,
     }
-
     try:
-        data = requests.get(url, params=params, timeout=5).json()
-        elements = data.get("rows", [{}])[0].get("elements", [{}])
-        el = elements[0]
-        if el.get("status") != "OK":
+        data = requests.get(url, params=params).json()
+        row = data.get("rows", [{}])[0]
+        element = row.get("elements", [{}])[0]
+        if element.get("status") != "OK":
             return None
-        return el["duration"]["value"] / 60.0
+        return element["duration"]["value"] / 60.0
     except:
         return None
 
 
 # ==================== 지도 Embed ====================
-def render_place_map(query, height=320):
+def render_place_map(query, height_mobile=260, height_pc=360):
     key = get_maps_api_key()
     if not key:
         return
@@ -212,9 +266,8 @@ def render_place_map(query, height=320):
     src = f"https://www.google.com/maps/embed/v1/place?key={key}&q={q}"
 
     st.markdown(f"""
-        <iframe width="100%" height="{height}"
-        style="border:0; border-radius:12px;"
-        loading="lazy"
+        <iframe class="mapframe"
+        height="{height_pc}"
         src="{src}">
         </iframe>
     """, unsafe_allow_html=True)
@@ -229,256 +282,184 @@ def render_directions_map(origin, dest, mode="transit"):
     src = f"https://www.google.com/maps/embed/v1/directions?key={key}&origin={o}&destination={d}&mode={mode}"
 
     st.markdown(f"""
-        <iframe width="100%" height="320"
-        style="border:0; border-radius:12px;"
-        loading="lazy"
+        <iframe class="mapframe"
+        height="360"
         src="{src}">
         </iframe>
     """, unsafe_allow_html=True)
 
 
-# ==================== UI 시작 ====================
-st.title("📅 일정? 바로잡 GO!")
+# ==================== UI ====================
 
-st.markdown(
-    "Google Calendar 일정과 내가 입력한 새 일정의 <b>거리·이동시간·간격</b>을 비교합니다.",
-    unsafe_allow_html=True
-)
-# ---------- 1. Google Calendar 불러오기 ----------
-st.markdown("### 1. Google Calendar 불러오기 (오늘 이후 일정)")
+st.markdown('<div class="appbar">📅 일정? 바로잡 GO!</div>', unsafe_allow_html=True)
 
-today = dt.date.today()
+# ---------- 1. 캘린더 불러오기 ----------
+with st.container():
+    st.markdown('<div class="sheet">', unsafe_allow_html=True)
 
-if st.button("🔄 캘린더에서 다가오는 일정 불러오기", use_container_width=True):
-    service, err = get_calendar_service()
-    if err:
-        st.error(err)
-    elif not service:
-        st.error("캘린더 인증 실패")
-    else:
+    st.markdown("### 🔄 Google Calendar 불러오기")
+
+    if st.button("오늘 이후 일정 불러오기"):
+        service, err = get_calendar_service()
+        if err:
+            st.error(err)
+        else:
+            st.session_state.google_events = fetch_google_events(service)
+            st.success(f"{len(st.session_state.google_events)}개 불러옴")
+
+    today = dt.date.today()
+    selected_date = st.date_input("날짜별 일정 보기", value=today)
+
+    # 날짜별 일정 출력
+    day_events = []
+    for ev in st.session_state.google_events:
         try:
-            events = fetch_google_events(service)
-            st.session_state.google_events = events
-            st.success(f"오늘 이후 일정 {len(events)}개 불러옴")
-        except Exception as e:
-            st.error(f"불러오기 오류: {e}")
+            if parse_iso_or_date(ev["start_raw"]).date() == selected_date:
+                day_events.append(ev)
+        except:
+            pass
 
+    if day_events:
+        for ev in day_events:
+            st.markdown(
+                f"- **{ev['summary']}**  \n"
+                f"  ⏰ {format_event_time_str(ev['start_raw'], ev['end_raw'])}"
+                + (f"  \n📍 {ev['location']}" if ev["location"] else "")
+            )
+    else:
+        st.markdown("선택 날짜 일정 없음")
 
-selected_date = st.date_input("날짜별 일정 보기", value=today)
-
-# 선택 날짜 일정 필터링
-selected_day_events = []
-for ev in st.session_state.google_events:
-    try:
-        dt_start = parse_iso_or_date(ev["start_raw"])
-        if dt_start.date() == selected_date:
-            selected_day_events.append(ev)
-    except:
-        pass
-
-if selected_day_events:
-    st.markdown("#### 📅 선택 날짜 일정")
-    for ev in selected_day_events:
-        st.markdown(
-            f"- **{ev['summary']}**  \n"
-            f"  ⏰ {format_event_time_str(ev['start_raw'], ev['end_raw'])}"
-            + (f"  \n📍 {ev['location']}" if ev.get("location") else "")
-        )
-else:
-    st.markdown("_선택한 날짜에는 일정이 없습니다._")
-
-# 전체 일정 보기
-if st.session_state.google_events:
-    with st.expander("오늘 이후 전체 일정 보기"):
-        for ev in st.session_state.google_events:
-            line = f"**{ev['summary']}**  \n"
-            line += f"⏰ {format_event_time_str(ev['start_raw'], ev['end_raw'])}"
-            if ev.get("location"):
-                line += f"  \n📍 {ev['location']}"
-            st.markdown(line)
-else:
-    st.info("캘린더 일정이 없습니다. 먼저 불러오세요.")
-
-st.markdown("---")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 # ---------- 2. 새 일정 입력 ----------
-st.markdown("### 2. 새 일정 추가 (주소 자동완성)")
+with st.container():
+    st.markdown('<div class="sheet">', unsafe_allow_html=True)
 
-with st.form("add_event_form"):
-    title = st.text_input("일정 제목", placeholder="예: 과외, 학원, 스터디 등")
+    st.markdown("### ➕ 새 일정 추가")
 
-    date = st.date_input("날짜", value=today, key="new_event_date")
+    with st.form("addevent"):
+        title = st.text_input("제목")
+        date = st.date_input("날짜", value=today)
+        start = st.time_input("시작", value=dt.time(9, 0))
+        end = st.time_input("종료", value=dt.time(10, 0))
 
-    start_time = st.time_input("시작 시간", value=dt.time(9, 0))
-    end_time = st.time_input("종료 시간", value=dt.time(10, 0))
+        loc = st.text_input("장소 입력 (자동완성 지원)")
+        auto = places_autocomplete(loc) if loc else []
 
-    loc_input = st.text_input(
-        "장소 입력 (자동완성 지원)", placeholder="예: 서울시청, 강남역 2번출구"
-    )
+        chosen_place = None
+        chosen_desc = None
 
-    # 자동완성 (DEBUG 제거 버전)
-    auto_results = []
-    chosen_idx = None
-    chosen_place_id = None
-    chosen_desc = None
-
-    if loc_input.strip():
-        auto_results = places_autocomplete(loc_input)
-
-        if auto_results:
-            chosen_idx = st.radio(
-                "주소 자동완성 결과",
-                options=list(range(len(auto_results))),
-                format_func=lambda i: auto_results[i]["description"],
+        if auto:
+            idx = st.radio(
+                "자동완성 결과",
+                options=list(range(len(auto))),
+                format_func=lambda i: auto[i]["description"],
             )
-            chosen_place_id = auto_results[chosen_idx]["place_id"]
-            chosen_desc = auto_results[chosen_idx]["description"]
-        else:
-            st.caption("자동완성 결과 없음")
+            chosen_place = auto[idx]["place_id"]
+            chosen_desc = auto[idx]["description"]
 
-    memo = st.text_area("메모 (선택)", placeholder="선택 입력")
+        memo = st.text_area("메모", placeholder="선택 입력")
 
-    submitted = st.form_submit_button("➕ 새 일정 추가")
+        submit_new = st.form_submit_button("추가하기")
 
-    if submitted:
-        if not title.strip():
-            st.warning("제목을 반드시 입력하세요.")
-        else:
-            final_loc = chosen_desc if chosen_desc else loc_input.strip()
-            final_place = chosen_place_id if chosen_place_id else None
-
-            new_event = {
-                "summary": title.strip(),
+        if submit_new:
+            final_loc = chosen_desc if chosen_desc else loc
+            st.session_state.last_added_event = {
+                "summary": title,
                 "date": date,
-                "start_time": start_time,
-                "end_time": end_time,
+                "start_time": start,
+                "end_time": end,
                 "location": final_loc,
-                "place_id": final_place,
-                "memo": memo.strip(),
+                "place_id": chosen_place,
+                "memo": memo,
             }
+            st.success("새 일정 추가됨!")
 
-            st.session_state.custom_events.append(new_event)
-            st.session_state.last_added_event = new_event
-            st.success("새 일정이 화면에 추가되었습니다!")
+    # 지도 표시
+    if st.session_state.last_added_event:
+        if st.session_state.last_added_event["location"]:
+            st.markdown("#### 🗺 새 일정 위치")
+            render_place_map(st.session_state.last_added_event["location"])
 
-
-# 지도 표시
-if st.session_state.last_added_event and st.session_state.last_added_event["location"]:
-    st.markdown("#### 🗺 새 일정 위치")
-    render_place_map(st.session_state.last_added_event["location"])
-
-st.markdown("---")
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
-# ---------- 3. 거리·이동시간·간격 계산 ----------
-st.markdown("### 3. 기존 일정 ↔ 새 일정 비교")
+# ---------- 3. 기존 일정 ↔ 새 일정 비교 ----------
+with st.container():
+    st.markdown('<div class="sheet">', unsafe_allow_html=True)
+    st.markdown("### 🚏 기존 일정 ↔ 새 일정 비교")
 
-calendar_loc_events = [
-    e for e in st.session_state.google_events if e.get("location")
-]
+    base_candidates = [ev for ev in st.session_state.google_events if ev["location"]]
 
-if not calendar_loc_events:
-    st.info("위치가 있는 캘린더 일정이 없습니다.")
-else:
-    col1, col2 = st.columns(2)
-
-    with col1:
-        base_event = st.selectbox(
-            "기준(출발지) 캘린더 일정 선택",
-            options=calendar_loc_events,
-            format_func=lambda e: f"{e['summary']} | {format_event_time_str(e['start_raw'], e['end_raw'])} | {e['location']}",
+    if not base_candidates:
+        st.info("위치가 있는 기존 일정 없음")
+    else:
+        base_ev = st.selectbox(
+            "기준 일정 선택",
+            options=base_candidates,
+            format_func=lambda e: f"{e['summary']} | {format_event_time_str(e['start_raw'], e['end_raw'])}",
         )
 
-        mode_label, mode_value = st.selectbox(
-            "이동 수단",
-            options=[
-                ("대중교통", "transit"),
-                ("자동차", "driving"),
-                ("도보", "walking"),
-                ("자전거", "bicycling"),
-            ],
-            format_func=lambda x: x[0],
-        )
-
-    with col2:
         ne = st.session_state.last_added_event
-        if ne:
-            st.markdown(
-                f"""
-                <div class="card">
-                <b>새 일정</b><br/>
-                제목: {ne['summary']}<br/>
-                날짜: {ne['date']}<br/>
-                시간: {ne['start_time'].strftime('%H:%M')} ~ {ne['end_time'].strftime('%H:%M')}<br/>
-                장소: {ne['location']}
-                </div>
-                """,
-                unsafe_allow_html=True,
+        if not ne:
+            st.info("새 일정을 먼저 추가하세요")
+        else:
+            mode_label, mode_value = st.selectbox(
+                "이동 수단",
+                options=[
+                    ("대중교통", "transit"),
+                    ("자동차", "driving"),
+                    ("도보", "walking"),
+                    ("자전거", "bicycling"),
+                ],
+                format_func=lambda x: x[0],
             )
-        else:
-            st.info("새 일정을 먼저 추가하세요.")
 
-    if st.session_state.last_added_event and base_event:
-        base_loc = base_event["location"]
-        new_loc = st.session_state.last_added_event["location"]
+            # 지도
+            st.markdown("#### 🗺 이동 경로")
+            render_directions_map(base_ev["location"], ne["location"], mode=mode_value)
 
-        if not new_loc:
-            st.warning("새 일정의 장소가 필요합니다.")
-        else:
-            st.markdown("#### 🚏 이동 경로 지도")
-            render_directions_map(base_loc, new_loc, mode=mode_value)
+            # 이동시간
+            dest_param = (
+                f"place_id:{ne['place_id']}"
+                if ne.get("place_id")
+                else ne["location"]
+            )
 
-            # Distance Matrix
-            origin = base_loc
-            dest = new_loc
-
-            if st.session_state.last_added_event.get("place_id"):
-                dest = "place_id:" + st.session_state.last_added_event["place_id"]
-
-            travel_min = get_travel_time_minutes(origin, dest, mode=mode_value)
+            travel = get_travel_time_minutes(
+                base_ev["location"], dest_param, mode_value
+            )
 
             # 시간 간격 계산
-            try:
-                base_end = parse_iso_or_date(base_event["end_raw"])
-                new_start = dt.datetime.combine(
-                    st.session_state.last_added_event["date"],
-                    st.session_state.last_added_event["start_time"],
-                )
+            base_end = parse_iso_or_date(base_ev["end_raw"])
+            new_start = dt.datetime.combine(ne["date"], ne["start_time"])
 
-                # tzinfo만 제거 (시간은 유지)
-                if base_end.tzinfo:
-                    base_end_naive = base_end.replace(tzinfo=None)
-                else:
-                    base_end_naive = base_end
-
-                gap_min = (new_start - base_end_naive).total_seconds() / 60.0
-            except:
-                gap_min = None
-
-            st.markdown("#### ⏱ 이동 시간 · 일정 간격 분석")
-
-            if travel_min is not None:
-                st.write(f"- 🚗 예상 이동 시간: **{travel_min:.0f}분**")
+            if base_end.tzinfo:
+                base_end_naive = base_end.replace(tzinfo=None)
             else:
-                st.write("- 이동시간을 계산할 수 없습니다.")
+                base_end_naive = base_end
 
-            if gap_min is not None:
-                st.write(
-                    f"- 🕒 기존 일정 종료 → 새 일정 시작 간격: **{gap_min:.0f}분**"
-                )
+            gap = (new_start - base_end_naive).total_seconds() / 60.0
 
-            # 추천 로직
-            if travel_min is not None and gap_min is not None:
-                buffer = gap_min - travel_min
+            st.markdown("#### 🕒 시간 비교 결과")
+
+            if travel is not None:
+                st.write(f"- 이동 시간: **{travel:.0f}분**")
+            else:
+                st.write("- 이동 시간 계산 불가")
+
+            st.write(f"- 일정 간 간격: **{gap:.0f}분**")
+
+            # 추천
+            if travel is not None:
+                buffer = gap - travel
                 need_extra = 60 - buffer
-
                 if buffer >= 60:
-                    st.success("일정 간 간격이 충분해요! 그대로 진행해도 괜찮습니다.")
+                    st.success("충분한 간격! 그대로 진행해도 좋아요.")
                 else:
-                    delay = max(0, int(need_extra))
                     st.warning(
-                        f"간격이 부족해요. 새 일정을 **약 {delay}분 뒤로 미루는 것**을 추천합니다."
+                        f"간격이 부족해요. 새 일정을 **약 {int(need_extra)}분 뒤로 미루는 것**을 추천합니다."
                     )
-            else:
-                st.info("데이터가 부족해 추천을 제공할 수 없습니다.")
+
+    st.markdown("</div>", unsafe_allow_html=True)
