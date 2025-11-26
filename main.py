@@ -16,7 +16,7 @@ except ImportError:
 # ==================== 설정 ====================
 
 # 🔹 반드시 네 구글 캘린더(사람 계정)의 이메일로 바꿔줘야 함
-CALENDAR_ID = "YOUR_GMAIL_ADDRESS_HERE"
+CALENDAR_ID = "dlspike520@gmail.com"
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
