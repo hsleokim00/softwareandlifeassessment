@@ -18,7 +18,7 @@ except ImportError:
 
 # 🔹 네 구글 캘린더(김현서) 캘린더 ID
 #    보통 본인 gmail 주소 그대로 쓰면 됨 (예: "dlspike520@gmail.com")
-CALENDAR_ID = "YOUR_GMAIL_ADDRESS_HERE"
+CALENDAR_ID = "dlspike520@gmail.com"
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
@@ -245,6 +245,10 @@ def places_autocomplete(input_text: str, language: str = "ko") -> List[Dict]:
 def get_travel_time_minutes(
     origin: str, destination: str, mode: str = "transit"
 ) -> Optional[float]:
+    """
+    Distance Matrix API로 예상 이동시간(분)을 가져온다.
+    (BILLING이 켜져 있고, Distance Matrix API가 활성화되어 있어야 함)
+    """
     api_key = get_maps_api_key()
     if not api_key:
         return None
@@ -564,19 +568,28 @@ else:
                 origin_param, dest_param, mode=mode_value
             )
 
-            # 🔍 일정 간 간격 계산 + 디버그
-            base_end_dt = parse_iso_or_date(base_event["end_raw"])
-            new_start_dt = dt.datetime.combine(
-                st.session_state.last_added_event["date"],
-                st.session_state.last_added_event["start_time"],
-            )
-            gap_min = (new_start_dt - base_end_dt).total_seconds() / 60.0
+            # 🔍 일정 간 간격 계산 (타임존 aware/naive 섞임 방지)
+            try:
+                base_end_dt = parse_iso_or_date(base_event["end_raw"])
+                new_start_dt = dt.datetime.combine(
+                    st.session_state.last_added_event["date"],
+                    st.session_state.last_added_event["start_time"],
+                )
+
+                # base_end_dt 를 naive 로 맞추기
+                if base_end_dt.tzinfo is not None:
+                    base_end_dt_naive = base_end_dt.astimezone().replace(tzinfo=None)
+                else:
+                    base_end_dt_naive = base_end_dt
+
+                gap_min = (new_start_dt - base_end_dt_naive).total_seconds() / 60.0
+            except Exception as e:
+                st.write("[DEBUG] gap_min 계산 중 오류:", e)
+                gap_min = None
 
             st.write("[DEBUG] origin_param =", origin_param)
             st.write("[DEBUG] dest_param   =", dest_param)
             st.write("[DEBUG] travel_min   =", travel_min)
-            st.write("[DEBUG] base_end_dt  =", base_end_dt)
-            st.write("[DEBUG] new_start_dt =", new_start_dt)
             st.write("[DEBUG] gap_min      =", gap_min)
 
             st.markdown("#### ⏱ 이동 시간 vs 일정 간 간격")
