@@ -14,7 +14,16 @@ except ImportError:
     service_account = None
 
 
-# ==================== 기본 설정 ====================
+# ==================== 고정 설정 ====================
+
+# 🔹 네 구글 캘린더(김현서) 캘린더 ID
+#    보통 본인 gmail 주소 그대로 쓰면 됨 (예: "dlspike520@gmail.com")
+CALENDAR_ID = "dlspike520@gmail.com"
+
+SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+
+
+# ==================== Streamlit 기본 설정 ====================
 st.set_page_config(
     page_title="일정? 바로잡 GO!",
     page_icon="📅",
@@ -65,6 +74,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
 # ==================== 세션 상태 ====================
 if "google_events" not in st.session_state:
     st.session_state.google_events: List[Dict] = []
@@ -87,8 +97,6 @@ def get_maps_api_key() -> Optional[str]:
 
 
 # ==================== Google Calendar (서비스 계정) ====================
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
-
 def get_calendar_service():
     """서비스 계정으로 Google Calendar service 생성"""
     if build is None or service_account is None:
@@ -105,16 +113,19 @@ def get_calendar_service():
     except Exception as e:
         return None, f"서비스 계정 인증 중 오류가 발생했습니다: {e}"
 
-import datetime as dt
-# 맨 위에 이미 dt 임포트 되어 있으니까 그대로 사용하면 돼
 
-def fetch_google_events(service, calendar_id: str = "primary", max_results: int = 50):
+def fetch_google_events(
+    service,
+    calendar_id: str = CALENDAR_ID,
+    max_results: int = 50,
+):
     """
-    한국 시간 기준 '오늘 0시(KST)' 이후의 모든 일정 불러오기.
+    한국 시간 기준 '오늘 0시(KST)' 이후의 일정들을 불러온다.
+    calendar_id 는 네 구글 캘린더(김현서)의 ID (보통 gmail 주소).
     """
-    # 🔹 한국 시간 기준 오늘 0시
+    # 한국 시간 기준 오늘 0시
     kst_today = dt.datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-    # 🔹 KST(UTC+9)를 UTC로 변환
+    # UTC로 변환 (KST = UTC+9)
     utc_today = kst_today - dt.timedelta(hours=9)
     time_min = utc_today.isoformat() + "Z"
 
@@ -122,7 +133,7 @@ def fetch_google_events(service, calendar_id: str = "primary", max_results: int 
         service.events()
         .list(
             calendarId=calendar_id,
-            timeMin=time_min,          # ← 여기만 이 값 쓰도록
+            timeMin=time_min,
             maxResults=max_results,
             singleEvents=True,
             orderBy="startTime",
@@ -132,7 +143,9 @@ def fetch_google_events(service, calendar_id: str = "primary", max_results: int 
     items = events_result.get("items", [])
     parsed = []
     for e in items:
-        start_raw = e.get("start", {}).get("dateTime") or e.get("start", {}).get("date")
+        start_raw = e.get("start", {}).get("dateTime") or e.get("start", {}).get(
+            "date"
+        )
         end_raw = e.get("end", {}).get("dateTime") or e.get("end", {}).get("date")
         parsed.append(
             {
@@ -149,19 +162,27 @@ def fetch_google_events(service, calendar_id: str = "primary", max_results: int 
 # ==================== 날짜/시간 처리 ====================
 def parse_iso_or_date(s: str) -> dt.datetime:
     if "T" in s:
+        # 2025-11-27T05:30:00+09:00 / Z 형태 모두 수용
         return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone()
     else:
         d = dt.date.fromisoformat(s)
         return dt.datetime.combine(d, dt.time.min)
+
 
 def format_event_time_str(start_raw: str, end_raw: str) -> str:
     try:
         start_dt = parse_iso_or_date(start_raw)
         end_dt = parse_iso_or_date(end_raw)
         if start_dt.date() == end_dt.date():
-            return f"{start_dt.strftime('%Y-%m-%d %H:%M')} ~ {end_dt.strftime('%H:%M')}"
+            return (
+                f"{start_dt.strftime('%Y-%m-%d %H:%M')} ~ "
+                f"{end_dt.strftime('%H:%M')}"
+            )
         else:
-            return f"{start_dt.strftime('%Y-%m-%d %H:%M')} ~ {end_dt.strftime('%Y-%m-%d %H:%M')}"
+            return (
+                f"{start_dt.strftime('%Y-%m-%d %H:%M')} ~ "
+                f"{end_dt.strftime('%Y-%m-%d %H:%M')}"
+            )
     except Exception:
         return f"{start_raw} → {end_raw}"
 
@@ -201,7 +222,9 @@ def places_autocomplete(input_text: str, language: str = "ko") -> List[Dict]:
 
 
 # ==================== Distance Matrix ====================
-def get_travel_time_minutes(origin: str, destination: str, mode: str = "transit") -> Optional[float]:
+def get_travel_time_minutes(
+    origin: str, destination: str, mode: str = "transit"
+) -> Optional[float]:
     api_key = get_maps_api_key()
     if not api_key:
         return None
@@ -260,7 +283,10 @@ def render_place_map_from_query(query: str, height: int = 320):
         unsafe_allow_html=True,
     )
 
-def render_directions_map(origin: str, destination: str, mode: str = "transit", height: int = 320):
+
+def render_directions_map(
+    origin: str, destination: str, mode: str = "transit", height: int = 320
+):
     api_key = get_maps_api_key()
     if not api_key:
         st.warning("Google Maps API Key가 설정되어 있지 않습니다.")
@@ -268,7 +294,10 @@ def render_directions_map(origin: str, destination: str, mode: str = "transit", 
 
     o = urllib.parse.quote(origin)
     d = urllib.parse.quote(destination)
-    src = f"https://www.google.com/maps/embed/v1/directions?key={api_key}&origin={o}&destination={d}&mode={mode}"
+    src = (
+        f"https://www.google.com/maps/embed/v1/directions"
+        f"?key={api_key}&origin={o}&destination={d}&mode={mode}"
+    )
 
     st.markdown(
         f"""
@@ -299,48 +328,46 @@ st.markdown(
 # ---------- 1. 캘린더 일정 불러오기 + 달력 ----------
 st.markdown("### 1. Google Calendar 연동 & 달력 보기 (오늘 이후 일정)")
 
-col_btn, col_calendar = st.columns([1, 2])
+today = dt.date.today()
 
-with col_btn:
-    if st.button("🔄 캘린더에서 다가오는 일정 불러오기", use_container_width=True):
-        service, err = get_calendar_service()
-        if err:
-            st.error(err)
-        elif not service:
-            st.error("캘린더 service 객체를 만들 수 없습니다.")
-        else:
-            try:
-                events = fetch_google_events(service, calendar_id="primary")
-                st.session_state.google_events = events
-                st.success(f"오늘 이후 일정 {len(events)}개를 불러왔습니다.")
-            except Exception as e:
-                st.error(f"캘린더 이벤트를 불러오는 중 오류가 발생했습니다: {e}")
-
-with col_calendar:
-    today = dt.date.today()
-    selected_date = st.date_input("달력에서 날짜 보기 (기존 달력 UI)", value=today)
-    # 선택한 날짜 기준으로 그 날 일정만 필터
-    day_events = []
-    for ev in st.session_state.google_events:
-        try:
-            start_dt = parse_iso_or_date(ev["start_raw"])
-            if start_dt.date() == selected_date:
-                day_events.append(ev)
-        except Exception:
-            pass
-
-    if day_events:
-        st.markdown("**선택한 날짜의 일정**")
-        for ev in day_events:
-            st.markdown(
-                f"- {ev['summary']}  \n"
-                f"  ⏰ {format_event_time_str(ev['start_raw'], ev['end_raw'])}"
-                + (f"  \n  📍 {ev['location']}" if ev.get('location') else "")
-            )
+if st.button("🔄 캘린더에서 다가오는 일정 불러오기", use_container_width=True):
+    service, err = get_calendar_service()
+    if err:
+        st.error(err)
+    elif not service:
+        st.error("캘린더 service 객체를 만들 수 없습니다.")
     else:
-        st.markdown("_선택한 날짜에 표시할 일정이 없습니다._")
+        try:
+            events = fetch_google_events(service)  # ← CALENDAR_ID 사용
+            st.session_state.google_events = events
+            st.success(f"오늘 이후 일정 {len(events)}개를 불러왔습니다.")
+        except Exception as e:
+            st.error(f"캘린더 이벤트를 불러오는 중 오류가 발생했습니다: {e}")
 
-# 전체 다가오는 일정 목록
+selected_date = st.date_input("달력에서 날짜 보기 (기존 달력 UI)", value=today)
+
+# 선택한 날짜 기준 일정만 필터
+day_events: List[Dict] = []
+for ev in st.session_state.google_events:
+    try:
+        start_dt = parse_iso_or_date(ev["start_raw"])
+        if start_dt.date() == selected_date:
+            day_events.append(ev)
+    except Exception:
+        pass
+
+if day_events:
+    st.markdown("**선택한 날짜의 일정**")
+    for ev in day_events:
+        st.markdown(
+            f"- {ev['summary']}  \n"
+            f"  ⏰ {format_event_time_str(ev['start_raw'], ev['end_raw'])}"
+            + (f"  \n  📍 {ev['location']}" if ev.get("location") else "")
+        )
+else:
+    st.markdown("_선택한 날짜에 표시할 일정이 없습니다._")
+
+# 전체 오늘 이후 일정 목록
 if st.session_state.google_events:
     with st.expander("📆 오늘 이후 전체 일정 목록 보기", expanded=False):
         for ev in st.session_state.google_events:
@@ -358,12 +385,12 @@ st.markdown("---")
 # ---------- 2. 새 일정 입력 (주소 자동완성 포함) ----------
 st.markdown("### 2. 새 일정 입력 (주소 자동완성 포함)")
 
-today = dt.date.today()
-
 with st.form("add_event_form"):
     title = st.text_input("일정 제목", placeholder="예) 동아리 모임, 학원 수업 등")
     date = st.date_input("날짜", value=today, key="new_event_date")
-    start_time = st.time_input("시작 시간", value=dt.time(15, 0), key="new_event_start")
+    start_time = st.time_input(
+        "시작 시간", value=dt.time(15, 0), key="new_event_start"
+    )
     end_time = st.time_input("끝나는 시간", value=dt.time(16, 0), key="new_event_end")
 
     loc_input = st.text_input(
@@ -422,7 +449,9 @@ with st.form("add_event_form"):
             st.success("새 일정을 화면 내 목록에 추가했습니다. (Google Calendar에는 쓰지 않습니다.)")
 
 # 방금 추가한 일정 위치 지도
-if st.session_state.last_added_event and st.session_state.last_added_event.get("location"):
+if st.session_state.last_added_event and st.session_state.last_added_event.get(
+    "location"
+):
     st.markdown("#### 🗺 방금 추가한 일정 위치")
     loc = st.session_state.last_added_event["location"]
     st.write(f"📍 {loc}")
@@ -449,7 +478,9 @@ else:
         base_event = st.selectbox(
             "기준이 될 캘린더 일정 선택 (위치 있는 일정만)",
             options=calendar_events_with_loc,
-            format_func=lambda ev: f"{ev['summary']} | {format_event_time_str(ev['start_raw'], ev['end_raw'])} | {ev['location']}",
+            format_func=lambda ev: f"{ev['summary']} | "
+            f"{format_event_time_str(ev['start_raw'], ev['end_raw'])} | "
+            f"{ev['location']}",
         )
 
         mode_label, mode_value = st.selectbox(
@@ -500,7 +531,9 @@ else:
             if new_place_id:
                 dest_param = f"place_id:{new_place_id}"
 
-            travel_min = get_travel_time_minutes(origin_param, dest_param, mode=mode_value)
+            travel_min = get_travel_time_minutes(
+                origin_param, dest_param, mode=mode_value
+            )
 
             try:
                 base_end_dt = parse_iso_or_date(base_event["end_raw"])
@@ -520,7 +553,9 @@ else:
                 st.write("- 예상 이동 시간을 계산할 수 없습니다.")
 
             if gap_min is not None:
-                st.write(f"- 기존 일정 종료 → 새 일정 시작 사이 간격: **약 {gap_min:.0f}분**")
+                st.write(
+                    f"- 기존 일정 종료 → 새 일정 시작 사이 간격: **약 {gap_min:.0f}분**"
+                )
             else:
                 st.write("- 일정 간 간격을 계산할 수 없습니다.")
 
@@ -540,4 +575,6 @@ else:
                         f"1시간 여유를 확보하려면 새 일정을 **약 {delay_min}분 정도 뒤로 미루는 것**을 추천합니다."
                     )
             else:
-                st.info("이동 시간 또는 일정 간 간격 정보를 충분히 얻지 못해, 텍스트 추천은 생략합니다.")
+                st.info(
+                    "이동 시간 또는 일정 간 간격 정보를 충분히 얻지 못해, 텍스트 추천은 생략합니다."
+                )
