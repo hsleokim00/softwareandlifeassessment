@@ -161,13 +161,32 @@ def fetch_google_events(
 
 # ==================== 날짜/시간 처리 ====================
 def parse_iso_or_date(s: str) -> dt.datetime:
-    if "T" in s:
-        # 2025-11-27T05:30:00+09:00 / Z 형태 모두 수용
-        return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone()
-    else:
+    """Google Calendar의 dateTime/date 문자열을 안전하게 datetime으로 변환"""
+    if not s:
+        raise ValueError("empty datetime string")
+
+    s = s.strip()
+
+    # Z는 UTC로 취급
+    if s.endswith("Z"):
+        s = s.replace("Z", "+00:00")
+
+    # 1) full ISO (2025-11-27T05:30:00+09:00 같은 형태)
+    try:
+        return dt.datetime.fromisoformat(s)
+    except Exception:
+        pass
+
+    # 2) date-only (2025-11-27 같은 종일 일정)
+    try:
         d = dt.date.fromisoformat(s)
         return dt.datetime.combine(d, dt.time.min)
+    except Exception:
+        pass
 
+    # 3) 그래도 안되면 디버그 찍고 에러 올리기
+    st.write("[DEBUG] parse_iso_or_date 실패:", s)
+    raise ValueError(f"지원하지 않는 날짜 형식: {s}")
 
 def format_event_time_str(start_raw: str, end_raw: str) -> str:
     try:
@@ -535,15 +554,15 @@ else:
                 origin_param, dest_param, mode=mode_value
             )
 
-            try:
-                base_end_dt = parse_iso_or_date(base_event["end_raw"])
-                new_start_dt = dt.datetime.combine(
-                    st.session_state.last_added_event["date"],
-                    st.session_state.last_added_event["start_time"],
-                )
-                gap_min = (new_start_dt - base_end_dt).total_seconds() / 60.0
-            except Exception:
-                gap_min = None
+           base_end_dt = parse_iso_or_date(base_event["end_raw"])
+    new_start_dt = dt.datetime.combine(
+        st.session_state.last_added_event["date"],
+        st.session_state.last_added_event["start_time"],
+    )
+    gap_min = (new_start_dt - base_end_dt).total_seconds() / 60.0
+
+    st.write("[DEBUG] base_end_dt:", base_end_dt, "new_start_dt:", new_start_dt, "gap_min:", gap_min)
+
 
             st.markdown("#### ⏱ 이동 시간 vs 일정 간 간격")
 
