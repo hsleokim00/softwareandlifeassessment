@@ -304,6 +304,32 @@ with col_btn:
             except Exception as e:
                 st.error(f"캘린더 이벤트를 불러오는 중 오류가 발생했습니다: {e}")
 
+        # --------------------- DEBUG ---------------------
+    st.markdown("### 🐞 DEBUG (Google Calendar 상태 확인)")
+
+    # 1) 서비스 계정 인증 체크
+    svc, err = get_calendar_service()
+    if err:
+        st.error(f"[DEBUG] Calendar Auth Error: {err}")
+    elif not svc:
+        st.error("[DEBUG] Calendar Service 생성 불가 (svc=None)")
+    else:
+        st.success("[DEBUG] Calendar 인증 성공: 서비스 계정 인증 OK")
+
+        # 2) 실제 fetch 테스트
+        try:
+            debug_events = fetch_google_events(svc)
+            st.info(f"[DEBUG] 불러온 이벤트 개수: {len(debug_events)}")
+
+            # 일부 데이터도 보여줌
+            if debug_events:
+                st.write("[DEBUG] 첫 번째 이벤트 샘플:", debug_events[0])
+            else:
+                st.warning("[DEBUG] 이벤트는 0개입니다 (인증 OK + API OK → 데이터가 과거일 수 있음)")
+        except Exception as e:
+            st.error(f"[DEBUG] fetch_google_events ERROR: {e}")
+
+
 with col_calendar:
     today = dt.date.today()
     selected_date = st.date_input("달력에서 날짜 보기 (기존 달력 UI)", value=today)
