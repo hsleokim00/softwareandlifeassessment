@@ -5,7 +5,7 @@ from typing import Optional, List, Dict
 import urllib.parse
 import requests
 
-# google-api-python-client, google-auth 관련 (없어도 앱 안 죽게 처리)
+# google-api-python-client, google-auth
 try:
     from googleapiclient.discovery import build
     from google.oauth2 import service_account
@@ -65,7 +65,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ==================== 세션 상태 초기화 ====================
+# ==================== 세션 상태 ====================
 if "google_events" not in st.session_state:
     st.session_state.google_events: List[Dict] = []
 
@@ -75,17 +75,8 @@ if "custom_events" not in st.session_state:
 if "last_added_event" not in st.session_state:
     st.session_state.last_added_event: Optional[Dict] = None
 
-if "autocomplete_results" not in st.session_state:
-    st.session_state.autocomplete_results: List[Dict] = []
 
-if "selected_location_text" not in st.session_state:
-    st.session_state.selected_location_text: str = ""
-
-if "selected_location_place_id" not in st.session_state:
-    st.session_state.selected_location_place_id: Optional[str] = None
-
-
-# ==================== 공통: Maps API Key ====================
+# ==================== Maps API Key ====================
 def get_maps_api_key() -> Optional[str]:
     try:
         key = st.secrets["google_maps"]["api_key"]
@@ -114,7 +105,7 @@ def get_calendar_service():
     except Exception as e:
         return None, f"서비스 계정 인증 중 오류가 발생했습니다: {e}"
 
-def fetch_google_events(service, calendar_id: str = "primary", max_results: int = 10):
+def fetch_google_events(service, calendar_id: str = "primary", max_results: int = 20):
     """다가오는 Google Calendar 일정 불러오기"""
     now = dt.datetime.utcnow().isoformat() + "Z"
     events_result = (
@@ -139,15 +130,14 @@ def fetch_google_events(service, calendar_id: str = "primary", max_results: int 
                 "summary": e.get("summary", "(제목 없음)"),
                 "start_raw": start_raw,
                 "end_raw": end_raw,
-                "location": e.get("location", ""),  # 문자열
+                "location": e.get("location", ""),
             }
         )
     return parsed
 
 
-# ==================== 시간/날짜 처리 ====================
+# ==================== 날짜/시간 처리 ====================
 def parse_iso_or_date(s: str) -> dt.datetime:
-    """Google Calendar의 dateTime 또는 date 문자열을 datetime으로 변환"""
     if "T" in s:
         return dt.datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone()
     else:
@@ -166,9 +156,8 @@ def format_event_time_str(start_raw: str, end_raw: str) -> str:
         return f"{start_raw} → {end_raw}"
 
 
-# ==================== Places API (자동완성 + 좌표) ====================
+# ==================== Places API (자동완성) ====================
 def places_autocomplete(input_text: str, language: str = "ko") -> List[Dict]:
-    """Places Autocomplete API로 주소 자동완성 후보를 가져옴"""
     api_key = get_maps_api_key()
     if not api_key or not input_text.strip():
         return []
@@ -178,7 +167,7 @@ def places_autocomplete(input_text: str, language: str = "ko") -> List[Dict]:
         "input": input_text,
         "key": api_key,
         "language": language,
-        "components": "country:kr",  # 한국 한정 (원하면 제거)
+        "components": "country:kr",
     }
 
     try:
@@ -186,56 +175,23 @@ def places_autocomplete(input_text: str, language: str = "ko") -> List[Dict]:
         data = resp.json()
         status = data.get("status")
         if status != "OK":
-            # 너무 시끄럽지 않게, 디버그 용으로만 표시
             st.info(f"[DEBUG] Places Autocomplete 상태: {status}")
             return []
         preds = data.get("predictions", [])
-        results = [
+        return [
             {
                 "description": p.get("description", ""),
                 "place_id": p.get("place_id"),
             }
             for p in preds
         ]
-        return results
     except Exception as e:
         st.info(f"[DEBUG] Places Autocomplete 요청 중 오류: {e}")
         return []
 
-def place_details(place_id: str) -> Optional[Dict]:
-    """Places Details API로 place_id의 좌표/정식 주소 조회"""
-    api_key = get_maps_api_key()
-    if not api_key or not place_id:
-        return None
 
-    url = "https://maps.googleapis.com/maps/api/place/details/json"
-    params = {
-        "place_id": place_id,
-        "key": api_key,
-        "language": "ko",
-        "fields": "geometry/location,formatted_address",
-    }
-    try:
-        resp = requests.get(url, params=params, timeout=5)
-        data = resp.json()
-        if data.get("status") != "OK":
-            st.info(f"[DEBUG] Place Details 상태: {data.get('status')}")
-            return None
-        result = data.get("result", {})
-        loc = result.get("geometry", {}).get("location", {})
-        return {
-            "formatted_address": result.get("formatted_address", ""),
-            "lat": loc.get("lat"),
-            "lng": loc.get("lng"),
-        }
-    except Exception as e:
-        st.info(f"[DEBUG] Place Details 요청 중 오류: {e}")
-        return None
-
-
-# ==================== Distance Matrix (이동시간) ====================
+# ==================== Distance Matrix ====================
 def get_travel_time_minutes(origin: str, destination: str, mode: str = "transit") -> Optional[float]:
-    """Distance Matrix API로 이동 시간(분) 계산. origin/destination은 주소 또는 'place_id:...' 형식."""
     api_key = get_maps_api_key()
     if not api_key:
         return None
@@ -269,9 +225,8 @@ def get_travel_time_minutes(origin: str, destination: str, mode: str = "transit"
         return None
 
 
-# ==================== 지도 표시 (Maps Embed) ====================
+# ==================== Maps Embed ====================
 def render_place_map_from_query(query: str, height: int = 320):
-    """검색어 기반 place 지도"""
     api_key = get_maps_api_key()
     if not api_key:
         st.warning("Google Maps API Key가 설정되어 있지 않습니다.")
@@ -296,7 +251,6 @@ def render_place_map_from_query(query: str, height: int = 320):
     )
 
 def render_directions_map(origin: str, destination: str, mode: str = "transit", height: int = 320):
-    """두 지점 사이 길찾기 지도"""
     api_key = get_maps_api_key()
     if not api_key:
         st.warning("Google Maps API Key가 설정되어 있지 않습니다.")
@@ -326,15 +280,15 @@ def render_directions_map(origin: str, destination: str, mode: str = "transit", 
 st.title("📅 일정? 바로잡 GO!")
 st.markdown(
     "<p class='subtle'>Google Calendar의 일정 위치와 내가 새로 추가한 일정의 위치를 비교해서, "
-    "실제로 이동 가능한지 지도와 시간으로 확인해 봅니다. 주소 자동완성(Places)도 함께 사용합니다.</p>",
+    "실제로 이동 가능한지 지도와 시간으로 확인해 봅니다. 주소 자동완성(Places)도 일정 입력창 안에서 작동합니다.</p>",
     unsafe_allow_html=True,
 )
 
 
-# ---------- 1. 캘린더 일정 불러오기 ----------
-st.markdown("### 1. Google Calendar 일정 불러오기 (서비스 계정)")
+# ---------- 1. 캘린더 일정 불러오기 + 간단 달력 ----------
+st.markdown("### 1. Google Calendar 연동 & 달력 보기")
 
-col_btn, col_help = st.columns([1, 2])
+col_btn, col_calendar = st.columns([1, 2])
 
 with col_btn:
     if st.button("🔄 캘린더에서 다가오는 일정 불러오기", use_container_width=True):
@@ -351,21 +305,33 @@ with col_btn:
             except Exception as e:
                 st.error(f"캘린더 이벤트를 불러오는 중 오류가 발생했습니다: {e}")
 
-with col_help:
-    st.markdown(
-        """
-        <div class="card">
-        <b>서비스 계정 연동 체크리스트</b><br/>
-        • Google Cloud에서 서비스 계정 JSON을 발급해서 secrets.toml에 넣었나요?<br/>
-        • Google Calendar 설정 &gt; 특정 사용자와 공유에 서비스 계정 이메일을 추가했나요?<br/>
-        • Google Calendar API를 같은 프로젝트에서 '사용'으로 켰나요?<br/>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+with col_calendar:
+    today = dt.date.today()
+    selected_date = st.date_input("달력에서 날짜 보기 (기존 달력 UI)", value=today)
+    # 선택한 날짜 기준으로 그 날 일정만 필터해서 보여줌
+    day_events = []
+    for ev in st.session_state.google_events:
+        try:
+            start_dt = parse_iso_or_date(ev["start_raw"])
+            if start_dt.date() == selected_date:
+                day_events.append(ev)
+        except Exception:
+            pass
 
+    if day_events:
+        st.markdown("**선택한 날짜의 일정**")
+        for ev in day_events:
+            st.markdown(
+                f"- {ev['summary']}  \n"
+                f"  ⏰ {format_event_time_str(ev['start_raw'], ev['end_raw'])}"
+                + (f"  \n  📍 {ev['location']}" if ev.get('location') else "")
+            )
+    else:
+        st.markdown("_선택한 날짜에 표시할 일정이 없습니다._")
+
+# 전체 다가오는 일정 목록
 if st.session_state.google_events:
-    with st.expander("📆 불러온 일정 목록 보기", expanded=True):
+    with st.expander("📆 전체 다가오는 일정 목록 보기", expanded=False):
         for ev in st.session_state.google_events:
             line = f"**{ev['summary']}**  \n"
             line += f"⏰ {format_event_time_str(ev['start_raw'], ev['end_raw'])}"
@@ -378,50 +344,45 @@ else:
 st.markdown("---")
 
 
-# ---------- 2. 주소 자동완성 (Places API) ----------
-st.markdown("### 2. 새 일정 장소 검색 (주소 자동완성)")
-
-with st.form("autocomplete_form"):
-    query = st.text_input("검색할 장소(예: 서울시청, 강남역 등)", value="", key="autocomplete_query")
-    submitted_search = st.form_submit_button("🔍 주소 자동완성 검색")
-
-    if submitted_search and query.strip():
-        results = places_autocomplete(query.strip())
-        st.session_state.autocomplete_results = results
-        if not results:
-            st.warning("검색 결과가 없거나, Places API 상태를 확인해야 합니다.")
-
-if st.session_state.autocomplete_results:
-    idx = st.selectbox(
-        "검색 결과에서 선택",
-        options=list(range(len(st.session_state.autocomplete_results))),
-        format_func=lambda i: st.session_state.autocomplete_results[i]["description"],
-    )
-    chosen = st.session_state.autocomplete_results[idx]
-    if st.button("이 주소를 새 일정 장소로 사용하기"):
-        st.session_state.selected_location_text = chosen["description"]
-        st.session_state.selected_location_place_id = chosen["place_id"]
-        st.success(f"선택한 주소를 새 일정에 사용할 준비가 되었습니다: {chosen['description']}")
-
-st.markdown("---")
-
-
-# ---------- 3. 새 일정 입력 + 위치 지도 ----------
-st.markdown("### 3. 새 일정 입력 + 위치 확인")
+# ---------- 2. 새 일정 입력 (주소 자동완성 포함) ----------
+st.markdown("### 2. 새 일정 입력 (주소 자동완성 포함)")
 
 today = dt.date.today()
-default_loc = st.session_state.selected_location_text or ""
 
 with st.form("add_event_form"):
     title = st.text_input("일정 제목", placeholder="예) 동아리 모임, 학원 수업 등")
-    date = st.date_input("날짜", value=today)
-    start_time = st.time_input("시작 시간", value=dt.time(15, 0))
-    end_time = st.time_input("끝나는 시간", value=dt.time(16, 0))
-    location = st.text_input(
-        "일정 장소 (자동완성으로 선택한 주소가 있으면 자동 채워집니다)",
-        value=default_loc,
+    date = st.date_input("날짜", value=today, key="new_event_date")
+    start_time = st.time_input("시작 시간", value=dt.time(15, 0), key="new_event_start")
+    end_time = st.time_input("끝나는 시간", value=dt.time(16, 0), key="new_event_end")
+
+    # 👉 여기 한 칸 안에서 자동완성까지 처리
+    loc_input = st.text_input(
+        "일정 장소 (입력하면 아래에 주소 자동완성 결과가 뜹니다)",
+        placeholder="예) 서울시청, 강남역 2번출구 등",
         key="new_event_location",
     )
+
+    autocomplete_results: List[Dict] = []
+    selected_idx: Optional[int] = None
+    selected_place_id: Optional[str] = None
+    selected_desc: Optional[str] = None
+
+    if loc_input.strip():
+        autocomplete_results = places_autocomplete(loc_input.strip())
+        if autocomplete_results:
+            selected_idx = st.radio(
+                "자동완성 결과에서 선택 (선택하면 이 주소가 일정에 사용됩니다)",
+                options=list(range(len(autocomplete_results))),
+                format_func=lambda i: autocomplete_results[i]["description"],
+                key="autocomplete_choice",
+            )
+            chosen = autocomplete_results[selected_idx]
+            selected_desc = chosen["description"]
+            selected_place_id = chosen["place_id"]
+            st.caption(f"선택된 주소: {selected_desc}")
+        else:
+            st.caption("자동완성 결과가 없습니다. 주소를 조금 더 구체적으로 입력해 보세요.")
+
     memo = st.text_area("메모 (선택)", placeholder="간단한 메모를 적을 수 있어요.")
 
     submitted_event = st.form_submit_button("➕ 이 일정 화면에 추가")
@@ -430,14 +391,21 @@ with st.form("add_event_form"):
         if not title.strip():
             st.warning("일정 제목은 반드시 입력해 주세요.")
         else:
+            # 자동완성에서 선택된 게 있으면 그 주소/place_id 사용
+            if selected_desc:
+                final_location = selected_desc
+                final_place_id = selected_place_id
+            else:
+                final_location = loc_input.strip()
+                final_place_id = None
+
             new_event = {
                 "summary": title.strip(),
                 "date": date,
                 "start_time": start_time,
                 "end_time": end_time,
-                "location": location.strip(),
-                # 자동완성으로 선택된 place_id (없으면 None)
-                "place_id": st.session_state.selected_location_place_id,
+                "location": final_location,
+                "place_id": final_place_id,
                 "memo": memo.strip(),
             }
             st.session_state.custom_events.append(new_event)
@@ -456,10 +424,9 @@ else:
 st.markdown("---")
 
 
-# ---------- 4. 캘린더 일정 vs 새 일정 거리/시간 비교 ----------
-st.markdown("### 4. 기존 캘린더 일정 ↔ 새 일정 거리·이동시간 비교")
+# ---------- 3. 캘린더 일정 ↔ 새 일정 거리·이동시간 비교 ----------
+st.markdown("### 3. 기존 캘린더 일정 ↔ 새 일정 거리·이동시간 비교")
 
-# 위치가 있는 캘린더 일정만 필터
 calendar_events_with_loc = [
     ev for ev in st.session_state.google_events if ev.get("location")
 ]
@@ -513,32 +480,22 @@ else:
             st.warning("새 일정에 장소가 입력되어 있어야 이동경로를 계산할 수 있습니다.")
         else:
             st.markdown("#### 🚏 이동 경로 지도")
-
             st.write(f"출발(캘린더 일정): {base_loc_text}")
             st.write(f"도착(새 일정): {new_loc_text}")
-
-            # 지도는 텍스트 검색 기반으로 표시
             render_directions_map(base_loc_text, new_loc_text, mode=mode_value)
 
-            # Distance Matrix: place_id 사용 가능하면 'place_id:...' 형식 사용
+            # Distance Matrix 파라미터
             origin_param = base_loc_text
             dest_param = new_loc_text
 
-            # 새 일정에 place_id가 있다면 우선 사용
+            # 새 일정 place_id가 있으면 사용
             new_place_id = st.session_state.last_added_event.get("place_id")
             if new_place_id:
                 dest_param = f"place_id:{new_place_id}"
 
-            # 캘린더 일정 위치도 place_id로 해석 시도 (실패해도 텍스트로 fallback)
-            base_details = places_autocomplete(base_loc_text)
-            if base_details:
-                pid = base_details[0].get("place_id")
-                if pid:
-                    origin_param = f"place_id:{pid}"
-
             travel_min = get_travel_time_minutes(origin_param, dest_param, mode=mode_value)
 
-            # 일정 간 간격 계산
+            # 일정 간 간격
             try:
                 base_end_dt = parse_iso_or_date(base_event["end_raw"])
                 new_start_dt = dt.datetime.combine(
@@ -563,7 +520,7 @@ else:
 
             if (travel_min is not None) and (gap_min is not None):
                 buffer = gap_min - travel_min
-                need_extra = 60 - buffer  # 1시간 여유를 위해 더 필요한 시간
+                need_extra = 60 - buffer  # 1시간 여유를 위해 필요한 추가 시간
 
                 if buffer >= 60:
                     st.success(
