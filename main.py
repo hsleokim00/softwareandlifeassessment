@@ -578,3 +578,8 @@ else:
                 st.info(
                     "이동 시간 또는 일정 간 간격 정보를 충분히 얻지 못해, 텍스트 추천은 생략합니다."
                 )
+
+st.write("[DEBUG] origin_param =", origin_param)
+st.write("[DEBUG] dest_param   =", dest_param)
+st.write("[DEBUG] travel_min   =", travel_min)
+st.write("[DEBUG] gap_min      =", gap_min)
