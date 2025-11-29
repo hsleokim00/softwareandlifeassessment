@@ -215,40 +215,81 @@ def format_event_time_str(start_raw: str, end_raw: str) -> str:
 
 
 # ---- Places 자동완성 ----
+
+# ---- Places 자동완성 (정밀 검색 + 자동완성 결합) ----
 def places_autocomplete(text: str):
-    key = get_maps_server_key()
-    if not key or not text.strip():
+    key = get_maps_key()
+    text = text.strip()
+    if not key or not text:
         if not key:
-            st.warning("⚠ Google Maps 서버용 API 키가 없습니다. secrets의 [google_maps].server_key를 확인해 주세요.")
+            st.warning("⚠ Google Maps API 키가 없습니다. secrets의 [google_maps].server_key를 확인해 주세요.")
         return []
 
-    url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
-    params = {
-        "input": text,
-        "key": key,
-        "language": "ko",
-        "components": "country:kr",
-    }
+    results: List[Dict] = []
 
+    # ---------- 1) Find Place from Text: 가장 잘 맞는 한 곳 ----------
     try:
-        resp = requests.get(url, params=params, timeout=5)
-        data = resp.json()
-        status = data.get("status")
-        if status != "OK":
-            msg = data.get("error_message", "")
-            # REQUEST_DENIED 같이 설정 문제면 바로 확인 가능하게 표시
-            st.caption(f"자동완성 API 상태: {status}{(' - ' + msg) if msg else ''}")
-            return []
-        return [
-            {
-                "description": p.get("description", ""),
-                "place_id": p.get("place_id"),
-            }
-            for p in data.get("predictions", [])
-        ]
+        find_url = "https://maps.googleapis.com/maps/api/place/findplacefromtext/json"
+        find_params = {
+            "input": text,
+            "inputtype": "textquery",
+            "fields": "place_id,formatted_address,name",
+            "language": "ko",
+            "region": "kr",
+            "key": key,
+        }
+        fdata = requests.get(find_url, params=find_params, timeout=5).json()
+        if fdata.get("status") == "OK" and fdata.get("candidates"):
+            c = fdata["candidates"][0]
+            name = c.get("name", "") or ""
+            addr = c.get("formatted_address", "") or ""
+            # 이름 + 주소를 합쳐서 보기 좋게
+            if name and addr and addr not in name:
+                desc = f"{name} ({addr})"
+            else:
+                desc = name or addr
+
+            results.append(
+                {
+                    "description": desc,
+                    "place_id": c.get("place_id"),
+                }
+            )
+    except Exception as e:
+        st.caption(f"정밀 장소 검색 중 오류: {e}")
+
+    # ---------- 2) Autocomplete: 주변 후보들 추가 ----------
+    try:
+        ac_url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
+        ac_params = {
+            "input": text,
+            "key": key,
+            "language": "ko",
+            "components": "country:kr",
+        }
+        ac_data = requests.get(ac_url, params=ac_params, timeout=5).json()
+        ac_status = ac_data.get("status")
+
+        if ac_status == "OK":
+            for p in ac_data.get("predictions", []):
+                pid = p.get("place_id")
+                # Find Place에서 이미 넣은 place_id는 중복 제거
+                if pid and any(r.get("place_id") == pid for r in results):
+                    continue
+                results.append(
+                    {
+                        "description": p.get("description", ""),
+                        "place_id": pid,
+                    }
+                )
+        else:
+            msg = ac_data.get("error_message", "")
+            st.caption(f"자동완성 API 상태: {ac_status}{(' - ' + msg) if msg else ''}")
     except Exception as e:
         st.caption(f"자동완성 요청 중 오류: {e}")
-        return []
+
+    # 너무 많이 나오면 상위 7개까지만 사용
+    return results[:7]
 
 
 # ---- Distance Matrix (이동시간) ----
