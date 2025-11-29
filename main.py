@@ -715,7 +715,7 @@ with st.container():
                 delay_min_recommend: Optional[int] = None
 
                 if (travel_min is not None) and (gap_min is not None):
-                    total_required = travel_min + 60  # 이동 + 1시간 버퍼
+                    total_required = travel_min + 30  # 이동 + 1시간 버퍼
                     if gap_min >= total_required:
                         st.success(
                             "이동 시간과 1시간 여유를 고려했을 때 일정 간 간격이 충분합니다. "
@@ -751,9 +751,9 @@ with st.container():
                             st.caption("이미 1시간 여유 이상 확보되어 있어 추가로 미룰 필요는 없어요.")
 
                     with col2:
-                        if st.button("⏰ 1시간(60분) 뒤로 미루기", key="btn_shift_60"):
-                            shift_last_event(60)
-                            st.success("새 일정이 60분(1시간) 뒤로 미뤄졌습니다.")
+                        if st.button("⏰ 30분(30분) 뒤로 미루기", key="btn_shift_30"):
+                            shift_last_event(30)
+                            st.success("새 일정이 30분 뒤로 미뤄졌습니다.")
                             st.experimental_rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
