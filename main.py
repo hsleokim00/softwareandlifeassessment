@@ -21,7 +21,6 @@ CALENDAR_ID = "dlspike520@gmail.com"
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
-
 st.set_page_config(
     page_title="일정? 바로잡 GO!",
     page_icon="📅",
@@ -107,11 +106,32 @@ if "last_added_event" not in st.session_state:
 
 # ==================== 공용 함수 ====================
 
-def get_maps_api_key() -> Optional[str]:
+def _get_maps_secret(key_name: str) -> Optional[str]:
+    """google_maps 섹션에서 key_name(server_key/embed_key)을 가져옴."""
     try:
-        return st.secrets["google_maps"]["api_key"]
+        return st.secrets["google_maps"][key_name]
     except Exception:
         return None
+
+
+def get_maps_server_key() -> Optional[str]:
+    """
+    서버 사이드 호출용 키 (Places, Distance Matrix 등).
+    Application restriction: None 또는 IP 제한으로 설정해 둔 키.
+    """
+    return _get_maps_secret("server_key")
+
+
+def get_maps_embed_key() -> Optional[str]:
+    """
+    브라우저(iframe)에서 쓰는 키 (Maps Embed / JS).
+    HTTP referrer: https://*.streamlit.app/* 로 제한한 키.
+    embed_key가 없으면 server_key로 폴백.
+    """
+    k = _get_maps_secret("embed_key")
+    if k:
+        return k
+    return get_maps_server_key()
 
 
 # ---- Google Calendar ----
@@ -196,10 +216,10 @@ def format_event_time_str(start_raw: str, end_raw: str) -> str:
 
 # ---- Places 자동완성 ----
 def places_autocomplete(text: str):
-    key = get_maps_api_key()
+    key = get_maps_server_key()
     if not key or not text.strip():
         if not key:
-            st.warning("⚠ Google Maps API 키가 없습니다. secrets에 google_maps.api_key를 확인해 주세요.")
+            st.warning("⚠ Google Maps 서버용 API 키가 없습니다. secrets의 [google_maps].server_key를 확인해 주세요.")
         return []
 
     url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
@@ -211,12 +231,13 @@ def places_autocomplete(text: str):
     }
 
     try:
-        data = requests.get(url, params=params, timeout=5).json()
+        resp = requests.get(url, params=params, timeout=5)
+        data = resp.json()
         status = data.get("status")
         if status != "OK":
-            # 여기서 상태/에러 메시지를 직접 보여줘서, Places API 설정 문제인지 바로 알 수 있게 함
             msg = data.get("error_message", "")
-            st.caption(f"자동완성 API 상태: {status} {(' - ' + msg) if msg else ''}")
+            # REQUEST_DENIED 같이 설정 문제면 바로 확인 가능하게 표시
+            st.caption(f"자동완성 API 상태: {status}{(' - ' + msg) if msg else ''}")
             return []
         return [
             {
@@ -236,8 +257,9 @@ def get_travel_time_minutes(origin: str, dest: str, mode: str = "transit") -> Op
     origin / dest : 주소 문자열 또는 'place_id:xxx'
     mode : driving / walking / bicycling / transit
     """
-    key = get_maps_api_key()
+    key = get_maps_server_key()
     if not key:
+        st.caption("Distance Matrix 호출용 서버 키가 없습니다. [google_maps].server_key를 확인하세요.")
         return None
 
     url = "https://maps.googleapis.com/maps/api/distancematrix/json"
@@ -256,11 +278,12 @@ def get_travel_time_minutes(origin: str, dest: str, mode: str = "transit") -> Op
         params["departure_time"] = "now"
 
     try:
-        data = requests.get(url, params=params, timeout=5).json()
+        resp = requests.get(url, params=params, timeout=5)
+        data = resp.json()
         status = data.get("status")
         if status != "OK":
             msg = data.get("error_message", "")
-            st.caption(f"Distance Matrix API 상태: {status} {(' - ' + msg) if msg else ''}")
+            st.caption(f"Distance Matrix API 상태: {status}{(' - ' + msg) if msg else ''}")
             return None
 
         row = data.get("rows", [{}])[0]
@@ -276,8 +299,9 @@ def get_travel_time_minutes(origin: str, dest: str, mode: str = "transit") -> Op
 
 # ---- 지도 Embed ----
 def render_place_map(query: str, height: int = 320):
-    key = get_maps_api_key()
+    key = get_maps_embed_key()
     if not key:
+        st.caption("지도를 표시하려면 [google_maps].embed_key 또는 server_key가 필요합니다.")
         return
     q = urllib.parse.quote(query)
     src = f"https://www.google.com/maps/embed/v1/place?key={key}&q={q}"
@@ -297,8 +321,9 @@ def render_place_map(query: str, height: int = 320):
 
 
 def render_directions_map(origin: str, dest: str, mode: str = "transit", height: int = 320):
-    key = get_maps_api_key()
+    key = get_maps_embed_key()
     if not key:
+        st.caption("이동 경로 지도를 표시하려면 [google_maps].embed_key 또는 server_key가 필요합니다.")
         return
     o = urllib.parse.quote(origin)
     d = urllib.parse.quote(dest)
@@ -571,6 +596,7 @@ with st.container():
                         st.session_state.last_added_event["start_time"],
                     )
 
+                    # google에서 tz가 붙어 올 수 있으므로, tz 정보만 제거해서 로컬 기준으로 맞춤
                     if base_end_dt.tzinfo is not None:
                         base_end_dt_naive = base_end_dt.replace(tzinfo=None)
                     else:
