@@ -1,6 +1,6 @@
 import streamlit as st
 import datetime as dt
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 import urllib.parse
 import requests
 import math
@@ -14,11 +14,9 @@ except ImportError:
     service_account = None
 
 
-# ==================== 설정 ====================
+# ==================== 기본 설정 ====================
 
-# 🔹 반드시 네 구글 캘린더(사람 계정)의 이메일로 바꿔줘야 함
 CALENDAR_ID = "dlspike520@gmail.com"
-
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
 st.set_page_config(
@@ -27,7 +25,7 @@ st.set_page_config(
     layout="centered",
 )
 
-# 간단한 반응형 + 카드 스타일
+# ----------- 스타일 -----------
 st.markdown(
     """
 <style>
@@ -49,7 +47,7 @@ st.markdown(
     margin-bottom: 1.2rem;
 }
 
-/* 카드 컨테이너 */
+/* 카드 */
 .section-card {
     padding: 1.2rem 1.2rem;
     border-radius: 14px;
@@ -75,7 +73,7 @@ st.markdown(
     color: #004443;
 }
 
-/* 입력창 모서리 */
+/* 입력창 둥글게 */
 .stTextInput > div > div > input,
 .stTextArea > div > textarea,
 .stDateInput > div > input,
@@ -92,7 +90,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-
 # ==================== 세션 상태 ====================
 if "google_events" not in st.session_state:
     st.session_state.google_events: List[Dict] = []
@@ -106,32 +103,12 @@ if "last_added_event" not in st.session_state:
 
 # ==================== 공용 함수 ====================
 
-def _get_maps_secret(key_name: str) -> Optional[str]:
-    """google_maps 섹션에서 key_name(server_key/embed_key)을 가져옴."""
+def get_maps_key() -> Optional[str]:
+    """server_key 하나만 사용 (secrets.toml 의 [google_maps].server_key)"""
     try:
-        return st.secrets["google_maps"][key_name]
+        return st.secrets["google_maps"]["server_key"]
     except Exception:
         return None
-
-
-def get_maps_server_key() -> Optional[str]:
-    """
-    서버 사이드 호출용 키 (Places, Distance Matrix 등).
-    Application restriction: None 또는 IP 제한으로 설정해 둔 키.
-    """
-    return _get_maps_secret("server_key")
-
-
-def get_maps_embed_key() -> Optional[str]:
-    """
-    브라우저(iframe)에서 쓰는 키 (Maps Embed / JS).
-    HTTP referrer: https://*.streamlit.app/* 로 제한한 키.
-    embed_key가 없으면 server_key로 폴백.
-    """
-    k = _get_maps_secret("embed_key")
-    if k:
-        return k
-    return get_maps_server_key()
 
 
 # ---- Google Calendar ----
@@ -151,7 +128,7 @@ def get_calendar_service():
 
 
 def fetch_google_events(service, calendar_id: str = CALENDAR_ID, max_results: int = 50):
-    """오늘(한국시간) 이후 일정만 조회"""
+    """오늘(한국시간) 이후 일정 조회"""
     today_kst = dt.datetime.now().replace(
         hour=0, minute=0, second=0, microsecond=0
     )
@@ -190,11 +167,8 @@ def fetch_google_events(service, calendar_id: str = CALENDAR_ID, max_results: in
 def parse_iso_or_date(s: str) -> dt.datetime:
     if not s:
         raise ValueError("empty")
-
-    s = s.strip()
     if s.endswith("Z"):
         s = s.replace("Z", "+00:00")
-
     try:
         return dt.datetime.fromisoformat(s)
     except Exception:
@@ -208,13 +182,80 @@ def format_event_time_str(start_raw: str, end_raw: str) -> str:
         e = parse_iso_or_date(end_raw)
         if s.date() == e.date():
             return f"{s.strftime('%Y-%m-%d %H:%M')} ~ {e.strftime('%H:%M')}"
-        else:
-            return f"{s.strftime('%Y-%m-%d %H:%M')} ~ {e.strftime('%Y-%m-%d %H:%M')}"
+        return f"{s.strftime('%Y-%m-%d %H:%M')} ~ {e.strftime('%Y-%m-%d %H:%M')}"
     except Exception:
         return f"{start_raw} → {end_raw}"
 
 
-# ---- Places 자동완성 ----
+# ---- Geocoding + 거리 계산 (fallback 용) ----
+def geocode_to_latlng(query: str) -> Optional[Tuple[float, float]]:
+    """
+    주소 문자열 또는 'place_id:xxx' 를 위도/경도로 변환.
+    Distance Matrix가 ZERO_RESULTS일 때 fallback으로 사용.
+    """
+    key = get_maps_key()
+    if not key:
+        return None
+
+    base_url = "https://maps.googleapis.com/maps/api/geocode/json"
+    params = {"key": key, "language": "ko", "region": "kr"}
+
+    if query.startswith("place_id:"):
+        params["place_id"] = query.split(":", 1)[1]
+    else:
+        params["address"] = query
+
+    try:
+        data = requests.get(base_url, params=params, timeout=5).json()
+        if data.get("status") != "OK" or not data.get("results"):
+            return None
+        result = data["results"][0]
+        loc = result["geometry"]["location"]
+        return loc["lat"], loc["lng"]
+    except Exception:
+        return None
+
+
+def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """두 점 사이의 구면 거리(km)"""
+    R = 6371.0
+    phi1 = math.radians(lat1)
+    phi2 = math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+
+    a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+
+def estimate_travel_time_by_distance(origin: str, dest: str, mode: str) -> Optional[float]:
+    """
+    Distance Matrix 가 ZERO_RESULTS일 때,
+    직선거리 + 모드별 평균 속도로 근사 시간(min)을 계산.
+    """
+    o_ll = geocode_to_latlng(origin)
+    d_ll = geocode_to_latlng(dest)
+    if not o_ll or not d_ll:
+        return None
+
+    dist_km = haversine_km(o_ll[0], o_ll[1], d_ll[0], d_ll[1])
+
+    # 모드별 평균 속도 (km/h)
+    if mode == "walking":
+        speed = 4.5
+    elif mode == "bicycling":
+        speed = 15.0
+    else:  # driving 또는 기타
+        speed = 30.0
+
+    if speed <= 0:
+        return None
+
+    hours = dist_km / speed
+    minutes = hours * 60.0
+    return minutes
+
 
 # ---- Places 자동완성 (정밀 검색 + 자동완성 결합) ----
 def places_autocomplete(text: str):
@@ -243,7 +284,6 @@ def places_autocomplete(text: str):
             c = fdata["candidates"][0]
             name = c.get("name", "") or ""
             addr = c.get("formatted_address", "") or ""
-            # 이름 + 주소를 합쳐서 보기 좋게
             if name and addr and addr not in name:
                 desc = f"{name} ({addr})"
             else:
@@ -273,7 +313,6 @@ def places_autocomplete(text: str):
         if ac_status == "OK":
             for p in ac_data.get("predictions", []):
                 pid = p.get("place_id")
-                # Find Place에서 이미 넣은 place_id는 중복 제거
                 if pid and any(r.get("place_id") == pid for r in results):
                     continue
                 results.append(
@@ -288,7 +327,7 @@ def places_autocomplete(text: str):
     except Exception as e:
         st.caption(f"자동완성 요청 중 오류: {e}")
 
-    # 너무 많이 나오면 상위 7개까지만 사용
+    # 너무 많으면 상위 7개까지만 사용
     return results[:7]
 
 
@@ -297,10 +336,12 @@ def get_travel_time_minutes(origin: str, dest: str, mode: str = "transit") -> Op
     """
     origin / dest : 주소 문자열 또는 'place_id:xxx'
     mode : driving / walking / bicycling / transit
+    1순위: Distance Matrix API
+    2순위: (driving/walking/bicycling 한정) 직선거리 기반 근사치
     """
-    key = get_maps_server_key()
+    key = get_maps_key()
     if not key:
-        st.caption("Distance Matrix 호출용 서버 키가 없습니다. [google_maps].server_key를 확인하세요.")
+        st.caption("Distance Matrix 호출용 API 키가 없습니다. [google_maps].server_key를 확인하세요.")
         return None
 
     url = "https://maps.googleapis.com/maps/api/distancematrix/json"
@@ -313,8 +354,6 @@ def get_travel_time_minutes(origin: str, dest: str, mode: str = "transit") -> Op
         "region": "kr",
         "key": key,
     }
-
-    # 🔹 transit 모드는 departure_time 필수
     if mode == "transit":
         params["departure_time"] = "now"
 
@@ -322,27 +361,43 @@ def get_travel_time_minutes(origin: str, dest: str, mode: str = "transit") -> Op
         resp = requests.get(url, params=params, timeout=5)
         data = resp.json()
         status = data.get("status")
-        if status != "OK":
-            msg = data.get("error_message", "")
-            st.caption(f"Distance Matrix API 상태: {status}{(' - ' + msg) if msg else ''}")
+
+        if status == "OK":
+            row = data.get("rows", [{}])[0]
+            el = row.get("elements", [{}])[0]
+            el_status = el.get("status")
+
+            if el_status == "OK":
+                return el["duration"]["value"] / 60.0
+
+            if el_status == "ZERO_RESULTS" and mode in ("driving", "walking", "bicycling"):
+                st.caption(
+                    f"Distance Matrix element 상태: {el_status} "
+                    f"(한국에서 {mode} 경로 시간이 제공되지 않아, 직선거리 기반으로 근사치 계산합니다.)"
+                )
+                return estimate_travel_time_by_distance(origin, dest, mode)
+
+            st.caption(f"Distance Matrix element 상태: {el_status}")
             return None
 
-        row = data.get("rows", [{}])[0]
-        el = row.get("elements", [{}])[0]
-        if el.get("status") != "OK":
-            st.caption(f"Distance Matrix element 상태: {el.get('status')}")
-            return None
-        return el["duration"]["value"] / 60.0
+        # status != OK
+        st.caption(f"Distance Matrix API 상태: {status}")
+        if mode in ("driving", "walking", "bicycling"):
+            return estimate_travel_time_by_distance(origin, dest, mode)
+        return None
+
     except Exception as e:
         st.caption(f"이동시간 요청 중 오류: {e}")
+        if mode in ("driving", "walking", "bicycling"):
+            return estimate_travel_time_by_distance(origin, dest, mode)
         return None
 
 
 # ---- 지도 Embed ----
 def render_place_map(query: str, height: int = 320):
-    key = get_maps_embed_key()
+    key = get_maps_key()
     if not key:
-        st.caption("지도를 표시하려면 [google_maps].embed_key 또는 server_key가 필요합니다.")
+        st.caption("지도를 표시하려면 [google_maps].server_key가 필요합니다.")
         return
     q = urllib.parse.quote(query)
     src = f"https://www.google.com/maps/embed/v1/place?key={key}&q={q}"
@@ -353,7 +408,6 @@ def render_place_map(query: str, height: int = 320):
             height="{height}"
             style="border:0; border-radius: 14px;"
             loading="lazy"
-            referrerpolicy="no-referrer-when-downgrade"
             src="{src}">
         </iframe>
         """,
@@ -362,9 +416,9 @@ def render_place_map(query: str, height: int = 320):
 
 
 def render_directions_map(origin: str, dest: str, mode: str = "transit", height: int = 320):
-    key = get_maps_embed_key()
+    key = get_maps_key()
     if not key:
-        st.caption("이동 경로 지도를 표시하려면 [google_maps].embed_key 또는 server_key가 필요합니다.")
+        st.caption("이동 경로 지도를 표시하려면 [google_maps].server_key가 필요합니다.")
         return
     o = urllib.parse.quote(origin)
     d = urllib.parse.quote(dest)
@@ -379,7 +433,6 @@ def render_directions_map(origin: str, dest: str, mode: str = "transit", height:
             height="{height}"
             style="border:0; border-radius: 14px;"
             loading="lazy"
-            referrerpolicy="no-referrer-when-downgrade"
             src="{src}">
         </iframe>
         """,
@@ -389,7 +442,6 @@ def render_directions_map(origin: str, dest: str, mode: str = "transit", height:
 
 # ---- 새 일정 시간 미루기 ----
 def shift_last_event(minutes: int):
-    """화면 내부에 저장된 마지막 새 일정(start/end)을 minutes만큼 뒤로 미룸."""
     ev = st.session_state.last_added_event
     if not ev:
         return
@@ -637,7 +689,6 @@ with st.container():
                         st.session_state.last_added_event["start_time"],
                     )
 
-                    # google에서 tz가 붙어 올 수 있으므로, tz 정보만 제거해서 로컬 기준으로 맞춤
                     if base_end_dt.tzinfo is not None:
                         base_end_dt_naive = base_end_dt.replace(tzinfo=None)
                     else:
@@ -682,7 +733,6 @@ with st.container():
                 else:
                     st.info("이동 시간 또는 일정 간 간격 정보를 충분히 얻지 못해, 텍스트 추천은 생략합니다.")
 
-                # ---- 시간 미루기 버튼들 ----
                 if st.session_state.last_added_event and (delay_min_recommend is not None):
                     col1, col2 = st.columns(2)
 
