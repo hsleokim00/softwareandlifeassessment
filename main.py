@@ -3,6 +3,7 @@ import datetime as dt
 from typing import Optional, List, Dict
 import urllib.parse
 import requests
+import math
 
 # google API client
 try:
@@ -294,6 +295,28 @@ def render_directions_map(origin: str, dest: str, mode: str = "transit", height:
     )
 
 
+# ---- 새 일정 시간 미루기 ----
+def shift_last_event(minutes: int):
+    """화면 내부에 저장된 마지막 새 일정(start/end)을 minutes만큼 뒤로 미룸."""
+    ev = st.session_state.last_added_event
+    if not ev:
+        return
+
+    start_dt = dt.datetime.combine(ev["date"], ev["start_time"])
+    end_dt = dt.datetime.combine(ev["date"], ev["end_time"])
+
+    delta = dt.timedelta(minutes=minutes)
+    new_start = start_dt + delta
+    new_end = end_dt + delta
+
+    ev["date"] = new_start.date()
+    ev["start_time"] = new_start.time()
+    ev["end_time"] = new_end.time()
+
+    # custom_events 리스트 안의 같은 dict도 같은 객체라 자동으로 반영됨
+    st.session_state.last_added_event = ev
+
+
 # ==================== UI ====================
 
 st.markdown('<div class="app-title">📅 일정? 바로잡 GO!</div>', unsafe_allow_html=True)
@@ -325,6 +348,7 @@ with st.container():
 
     selected_date = st.date_input("날짜별 일정 보기", value=today, key="calendar_date")
 
+    # 구글 캘린더 일정 (해당 날짜)
     day_events: List[Dict] = []
     for ev in st.session_state.google_events:
         try:
@@ -334,14 +358,35 @@ with st.container():
         except Exception:
             pass
 
-    if day_events:
+    # 화면 내에서 만든 커스텀 일정 (해당 날짜)
+    custom_day_events: List[Dict] = [
+        ev for ev in st.session_state.custom_events if ev["date"] == selected_date
+    ]
+
+    if day_events or custom_day_events:
         st.markdown("**선택한 날짜의 일정**")
-        for ev in day_events:
-            text = f"- **{ev['summary']}**  \n"
-            text += f"  ⏰ {format_event_time_str(ev['start_raw'], ev['end_raw'])}"
-            if ev.get("location"):
-                text += f"  \n  📍 {ev['location']}"
-            st.markdown(text)
+
+        # Google Calendar
+        if day_events:
+            st.markdown("📆 **Google Calendar 일정**")
+            for ev in day_events:
+                text = f"- **{ev['summary']}**  \n"
+                text += f"  ⏰ {format_event_time_str(ev['start_raw'], ev['end_raw'])}"
+                if ev.get("location"):
+                    text += f"  \n  📍 {ev['location']}"
+                st.markdown(text)
+
+        # Custom events
+        if custom_day_events:
+            st.markdown("📝 **화면 내에서 추가한 일정**")
+            for ev in custom_day_events:
+                text = (
+                    f"- **{ev['summary']}**  \n"
+                    f"  ⏰ {ev['date']} {ev['start_time'].strftime('%H:%M')} ~ {ev['end_time'].strftime('%H:%M')}"
+                )
+                if ev.get("location"):
+                    text += f"  \n  📍 {ev['location']}"
+                st.markdown(text)
     else:
         st.caption("선택한 날짜에 표시할 일정이 없습니다.")
 
@@ -489,6 +534,7 @@ with st.container():
                 st.markdown("#### 🗺 이동 경로 지도")
                 render_directions_map(base_loc_text, new_loc_text, mode=mode_value)
 
+                # Distance Matrix용 origin/destination
                 origin_param = base_loc_text
                 dest_param = new_loc_text
                 new_place_id = st.session_state.last_added_event.get("place_id")
@@ -497,7 +543,7 @@ with st.container():
 
                 travel_min = get_travel_time_minutes(origin_param, dest_param, mode=mode_value)
 
-                # 일정 간 간격 계산 (타임존 꼬임 없이)
+                # 일정 간 간격 계산
                 try:
                     base_end_dt = parse_iso_or_date(base_event["end_raw"])
                     new_start_dt = dt.datetime.combine(
@@ -528,22 +574,51 @@ with st.container():
                 else:
                     st.write("- 일정 간 간격을 계산할 수 없습니다.")
 
-                if (travel_min is not None) and (gap_min is not None):
-                    buffer = gap_min - travel_min
-                    need_extra = 60 - buffer  # 1시간 여유 기준
+                delay_min_recommend: Optional[int] = None
 
-                    if buffer >= 60:
+                if (travel_min is not None) and (gap_min is not None):
+                    # 1시간(60분) 여유를 포함해 필요한 총 시간
+                    total_required = travel_min + 60  # 이동 + 1시간 버퍼
+                    if gap_min >= total_required:
                         st.success(
                             "이동 시간과 1시간 여유를 고려했을 때 일정 간 간격이 충분합니다. "
                             "현재 시간대로 진행해도 무리가 없을 것 같아요."
                         )
+                        delay_min_recommend = 0
                     else:
-                        delay_min = max(0, int(need_extra))
+                        # 최소 몇 분을 뒤로 미뤄야 총 gap이 travel + 60이 되는지 계산
+                        need = total_required - gap_min
+                        delay_min_recommend = max(1, math.ceil(need))
                         st.warning(
-                            f"이동 시간에 비해 일정 간 간격이 부족해 보입니다. "
-                            f"1시간 여유를 확보하려면 새 일정을 **약 {delay_min}분 정도 뒤로 미루는 것**을 추천합니다."
+                            f"이동 시간에 비해 일정 간 간격이 부족해 보입니다.  \n"
+                            f"1시간 여유까지 고려하면 새 일정을 **최소 {delay_min_recommend}분 이상** "
+                            f"뒤로 미루는 게 안전해요."
                         )
                 else:
                     st.info("이동 시간 또는 일정 간 간격 정보를 충분히 얻지 못해, 텍스트 추천은 생략합니다.")
+
+                # ---- 시간 미루기 버튼들 ----
+                if st.session_state.last_added_event and (delay_min_recommend is not None):
+                    col1, col2 = st.columns(2)
+
+                    with col1:
+                        if delay_min_recommend > 0:
+                            if st.button(
+                                f"⏩ 추천({delay_min_recommend}분)만큼 미루기",
+                                key="btn_shift_recommend",
+                            ):
+                                shift_last_event(delay_min_recommend)
+                                st.success(
+                                    f"새 일정이 추천대로 {delay_min_recommend}분 뒤로 미뤄졌습니다."
+                                )
+                                st.experimental_rerun()
+                        else:
+                            st.caption("이미 1시간 여유 이상 확보되어 있어 추가로 미룰 필요는 없어요.")
+
+                    with col2:
+                        if st.button("⏰ 1시간(60분) 뒤로 미루기", key="btn_shift_60"):
+                            shift_last_event(60)
+                            st.success("새 일정이 60분(1시간) 뒤로 미뤄졌습니다.")
+                            st.experimental_rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
