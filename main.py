@@ -198,6 +198,8 @@ def format_event_time_str(start_raw: str, end_raw: str) -> str:
 def places_autocomplete(text: str):
     key = get_maps_api_key()
     if not key or not text.strip():
+        if not key:
+            st.warning("⚠ Google Maps API 키가 없습니다. secrets에 google_maps.api_key를 확인해 주세요.")
         return []
 
     url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
@@ -210,7 +212,11 @@ def places_autocomplete(text: str):
 
     try:
         data = requests.get(url, params=params, timeout=5).json()
-        if data.get("status") != "OK":
+        status = data.get("status")
+        if status != "OK":
+            # 여기서 상태/에러 메시지를 직접 보여줘서, Places API 설정 문제인지 바로 알 수 있게 함
+            msg = data.get("error_message", "")
+            st.caption(f"자동완성 API 상태: {status} {(' - ' + msg) if msg else ''}")
             return []
         return [
             {
@@ -219,12 +225,17 @@ def places_autocomplete(text: str):
             }
             for p in data.get("predictions", [])
         ]
-    except Exception:
+    except Exception as e:
+        st.caption(f"자동완성 요청 중 오류: {e}")
         return []
 
 
-# ---- Distance Matrix ----
+# ---- Distance Matrix (이동시간) ----
 def get_travel_time_minutes(origin: str, dest: str, mode: str = "transit") -> Optional[float]:
+    """
+    origin / dest : 주소 문자열 또는 'place_id:xxx'
+    mode : driving / walking / bicycling / transit
+    """
     key = get_maps_api_key()
     if not key:
         return None
@@ -235,16 +246,31 @@ def get_travel_time_minutes(origin: str, dest: str, mode: str = "transit") -> Op
         "destinations": dest,
         "mode": mode,
         "units": "metric",
+        "language": "ko",
+        "region": "kr",
         "key": key,
     }
+
+    # 🔹 transit 모드는 departure_time 필수
+    if mode == "transit":
+        params["departure_time"] = "now"
+
     try:
         data = requests.get(url, params=params, timeout=5).json()
+        status = data.get("status")
+        if status != "OK":
+            msg = data.get("error_message", "")
+            st.caption(f"Distance Matrix API 상태: {status} {(' - ' + msg) if msg else ''}")
+            return None
+
         row = data.get("rows", [{}])[0]
         el = row.get("elements", [{}])[0]
         if el.get("status") != "OK":
+            st.caption(f"Distance Matrix element 상태: {el.get('status')}")
             return None
         return el["duration"]["value"] / 60.0
-    except Exception:
+    except Exception as e:
+        st.caption(f"이동시간 요청 중 오류: {e}")
         return None
 
 
@@ -313,7 +339,6 @@ def shift_last_event(minutes: int):
     ev["start_time"] = new_start.time()
     ev["end_time"] = new_end.time()
 
-    # custom_events 리스트 안의 같은 dict도 같은 객체라 자동으로 반영됨
     st.session_state.last_added_event = ev
 
 
@@ -348,7 +373,6 @@ with st.container():
 
     selected_date = st.date_input("날짜별 일정 보기", value=today, key="calendar_date")
 
-    # 구글 캘린더 일정 (해당 날짜)
     day_events: List[Dict] = []
     for ev in st.session_state.google_events:
         try:
@@ -358,7 +382,6 @@ with st.container():
         except Exception:
             pass
 
-    # 화면 내에서 만든 커스텀 일정 (해당 날짜)
     custom_day_events: List[Dict] = [
         ev for ev in st.session_state.custom_events if ev["date"] == selected_date
     ]
@@ -366,7 +389,6 @@ with st.container():
     if day_events or custom_day_events:
         st.markdown("**선택한 날짜의 일정**")
 
-        # Google Calendar
         if day_events:
             st.markdown("📆 **Google Calendar 일정**")
             for ev in day_events:
@@ -376,7 +398,6 @@ with st.container():
                     text += f"  \n  📍 {ev['location']}"
                 st.markdown(text)
 
-        # Custom events
         if custom_day_events:
             st.markdown("📝 **화면 내에서 추가한 일정**")
             for ev in custom_day_events:
@@ -534,7 +555,6 @@ with st.container():
                 st.markdown("#### 🗺 이동 경로 지도")
                 render_directions_map(base_loc_text, new_loc_text, mode=mode_value)
 
-                # Distance Matrix용 origin/destination
                 origin_param = base_loc_text
                 dest_param = new_loc_text
                 new_place_id = st.session_state.last_added_event.get("place_id")
@@ -577,7 +597,6 @@ with st.container():
                 delay_min_recommend: Optional[int] = None
 
                 if (travel_min is not None) and (gap_min is not None):
-                    # 1시간(60분) 여유를 포함해 필요한 총 시간
                     total_required = travel_min + 60  # 이동 + 1시간 버퍼
                     if gap_min >= total_required:
                         st.success(
@@ -586,7 +605,6 @@ with st.container():
                         )
                         delay_min_recommend = 0
                     else:
-                        # 최소 몇 분을 뒤로 미뤄야 총 gap이 travel + 60이 되는지 계산
                         need = total_required - gap_min
                         delay_min_recommend = max(1, math.ceil(need))
                         st.warning(
