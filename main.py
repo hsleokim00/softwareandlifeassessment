@@ -565,6 +565,157 @@ def render_tmap_route_map(start_x: float, start_y: float, end_x: float, end_y: f
     components.html(html, height=height, scrolling=False)
 
 
+# ==================== (추가) 일정 충돌/이동시간 로직용 유틸 ====================
+
+def to_minutes(delta: dt.timedelta) -> int:
+    """timedelta -> 분 단위 정수"""
+    return int(delta.total_seconds() // 60)
+
+
+def get_travel_minutes_for_logic(origin: str, dest: str, mode: str = "driving") -> int:
+    """
+    로직 계산용 이동시간(분).
+    - 기본: 자동차(Tmap driving)
+    - origin/dest 없거나 API 실패 시 0분으로 처리
+    """
+    if not origin or not dest:
+        return 0
+
+    minutes: Optional[float] = None
+
+    if mode in ("driving", "walking", "bicycling"):
+        minutes, _, _ = get_tmap_route(origin, dest, mode)
+    else:
+        minutes = get_google_travel_time_minutes(origin, dest, "transit")
+
+    if minutes is None:
+        return 0
+    return int(math.ceil(minutes))
+
+
+def compare_two_events_logic(new_ev: Dict, other: Dict, mode: str = "driving") -> Optional[Dict]:
+    """
+    새로 입력한 일정(new_ev)과 기존 일정(other)을 비교해서
+    - i-a) 약속 시간이 겹치는 경우:
+        k = (겹치는 시간) + (이동시간) + 30
+    - i-b) 겹치지 않지만 이동시간을 고려하면 도착 불가능한 경우:
+        k = (선행 종료 - 후행 시작 + 이동시간) + 30  (= -gap + travel + 30)
+    를 계산해서 반환.
+
+    반환 예:
+      {'type': 'overlap', 'k': 50}
+      {'type': 'travel_impossible', 'k': 40}
+      문제가 없으면 None
+    """
+    start_new: dt.datetime = new_ev["start"]
+    end_new: dt.datetime = new_ev["end"]
+    start_o: dt.datetime = other["start"]
+    end_o: dt.datetime = other["end"]
+
+    # 날짜가 다르면 이 둘 사이에서는 충돌 계산 안 함
+    if start_new.date() != start_o.date():
+        return None
+
+    # 1) 시간이 겹치는지 확인 (i-a)
+    if (start_new < end_o) and (start_o < end_new):
+        overlap_start = max(start_new, start_o)
+        overlap_end = min(end_new, end_o)
+        overlap_min = to_minutes(overlap_end - overlap_start)
+
+        travel_min = get_travel_minutes_for_logic(
+            new_ev.get("location", ""),
+            other.get("location", ""),
+            mode=mode,
+        )
+        k = overlap_min + travel_min + 30
+        return {"type": "overlap", "k": max(0, k)}
+
+    # 2) 시간이 안 겹칠 때: 선행/후행 구분 (i-b)
+    if end_new <= start_o:
+        # new_ev가 선행
+        first, second = new_ev, other
+    elif end_o <= start_new:
+        # other가 선행
+        first, second = other, new_ev
+    else:
+        # 이 경우는 논리상 이미 겹치는 케이스라 여기까지 오지 않는 게 정상
+        return None
+
+    travel_min = get_travel_minutes_for_logic(
+        first.get("location", ""),
+        second.get("location", ""),
+        mode=mode,
+    )
+    gap_min = to_minutes(second["start"] - first["end"])  # (후행 시작 - 선행 종료)
+
+    # 의미상:
+    #   (후행 시작 - 선행 종료 - 이동시간) > 0  → 이동 가능
+    # 코드: gap_min - travel_min > 0 이면 OK
+    if gap_min - travel_min > 0:
+        return None  # 이동 가능 → k 필요 없음
+
+    # 이동 불가능 → k 계산
+    #   k = (선행 종료 - 후행 시작 + 이동시간) + 30 = (-gap_min + travel_min) + 30
+    k = (-gap_min + travel_min) + 30
+    return {"type": "travel_impossible", "k": max(0, k)}
+
+
+def evaluate_new_event_against_all(new_ev_logic: Dict, existing_logic: List[Dict], mode: str = "driving") -> Dict:
+    """
+    새 일정 vs 기존 모든 일정(구글 + 커스텀)을 비교해서
+    i) 경고 & 미루기 추천 / ii) 그대로 등록 추천 을 판정.
+
+    반환 예:
+      {"status": "warn", "k": 60, "message": "..."}
+      {"status": "ok", "message": "..."}
+    """
+    same_date_found = False
+    best_overlap_k = 0
+    best_travel_k = 0
+
+    for ev in existing_logic:
+        if ev["start"].date() == new_ev_logic["start"].date():
+            same_date_found = True
+
+        res = compare_two_events_logic(new_ev_logic, ev, mode=mode)
+        if not res:
+            continue
+
+        if res["type"] == "overlap":
+            best_overlap_k = max(best_overlap_k, res["k"])
+        elif res["type"] == "travel_impossible":
+            best_travel_k = max(best_travel_k, res["k"])
+
+    # ii-a) 같은 날짜 일정 자체가 없을 때
+    if not same_date_found:
+        return {
+            "status": "ok",
+            "message": "겹치는 일정이 없네요! 입력하신 일정을 등록하겠습니다!",
+        }
+
+    # i-a) 날짜는 같고, 시간이 실제로 겹치는 일정이 있을 때
+    if best_overlap_k > 0:
+        return {
+            "status": "warn",
+            "k": best_overlap_k,
+            "message": f"약속 시간이 겹치네요!! {best_overlap_k}분 만큼 약속을 미루는 것을 추천해요!",
+        }
+
+    # i-b) 날짜는 같고, 시간은 안 겹치지만 이동시간 때문에 도착 불가능한 경우
+    if best_travel_k > 0:
+        return {
+            "status": "warn",
+            "k": best_travel_k,
+            "message": f"이동 시간을 고려했을 때, 제시간에 도착하지 못할 수도 있어요! {best_travel_k}분 만큼 약속을 미루는 것을 추천해요!",
+        }
+
+    # ii-b) 날짜는 같고, 모든 일정 쌍에 대해 이동 충분
+    return {
+        "status": "ok",
+        "message": "일정 간 이동이 충분히 가능해요! 입력하신 일정을 등록하겠습니다!!",
+    }
+
+
 # ---- 새 일정 시간 미루기 ----
 def shift_last_event(minutes: int):
     ev = st.session_state.last_added_event
@@ -723,6 +874,64 @@ with st.container():
                     "place_id": chosen_place_id,
                     "memo": memo.strip(),
                 }
+
+                # ====== (추가) 새 일정 vs 기존 모든 일정 로직 적용 ======
+                new_start_dt = dt.datetime.combine(date, start_time)
+                new_end_dt = dt.datetime.combine(date, end_time)
+                new_ev_logic = {
+                    "start": new_start_dt,
+                    "end": new_end_dt,
+                    "location": final_location,
+                    "source": "program",
+                }
+
+                existing_logic: List[Dict] = []
+
+                # 1) 구글 일정들
+                for gev in st.session_state.google_events:
+                    try:
+                        s = parse_iso_or_date(gev["start_raw"])
+                        e = parse_iso_or_date(gev["end_raw"])
+                        if s.tzinfo is not None:
+                            s = s.replace(tzinfo=None)
+                        if e.tzinfo is not None:
+                            e = e.replace(tzinfo=None)
+                        existing_logic.append(
+                            {
+                                "start": s,
+                                "end": e,
+                                "location": gev.get("location", ""),
+                                "source": "google",
+                            }
+                        )
+                    except Exception:
+                        continue
+
+                # 2) 이미 추가된 커스텀 일정들
+                for cev in st.session_state.custom_events:
+                    s = dt.datetime.combine(cev["date"], cev["start_time"])
+                    e = dt.datetime.combine(cev["date"], cev["end_time"])
+                    existing_logic.append(
+                        {
+                            "start": s,
+                            "end": e,
+                            "location": cev.get("location", ""),
+                            "source": "program",
+                        }
+                    )
+
+                eval_result = evaluate_new_event_against_all(
+                    new_ev_logic,
+                    existing_logic,
+                    mode="driving",
+                )
+
+                if eval_result["status"] == "warn":
+                    st.warning(eval_result["message"])
+                else:
+                    st.info(eval_result["message"])
+                # ====== 로직 끝, 기존 기능 그대로 유지 ======
+
                 st.session_state.custom_events.append(new_event)
                 st.session_state.last_added_event = new_event
                 st.success("새 일정을 화면 내 목록에 추가했습니다. (Google Calendar에는 쓰지 않습니다.)")
@@ -751,7 +960,8 @@ with st.container():
 
     st.markdown("</div>", unsafe_allow_html=True)
 
-# ---------- 3. 기존 일정 ↔ 새 일정 비교 ----------
+# ---------- 3. 기존 일정 ↔ 새 일정 거리·시간 비교 ----------
+# ⚠️ 이 부분은 네가 준 원본 코드를 그대로 유지
 with st.container():
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
