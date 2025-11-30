@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Tuple
 import urllib.parse
 import requests
 import math
+import pydeck as pdk  # 🔹 경로 지도 그리기용
 
 # google API client
 try:
@@ -16,9 +17,7 @@ except ImportError:
 
 # ==================== 설정 ====================
 
-# 🔹 반드시 네 구글 캘린더(사람 계정)의 이메일로 바꿔줘야 함
 CALENDAR_ID = "dlspike520@gmail.com"
-
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
 st.set_page_config(
@@ -107,7 +106,6 @@ if "last_added_event" not in st.session_state:
 # ==================== 공용 함수 ====================
 
 def get_maps_api_key() -> Optional[str]:
-    """secrets.toml 에 [google_maps].api_key"""
     try:
         return st.secrets["google_maps"]["api_key"]
     except Exception:
@@ -115,7 +113,6 @@ def get_maps_api_key() -> Optional[str]:
 
 
 def get_tmap_app_key() -> Optional[str]:
-    """secrets.toml 에 [tmap].app_key"""
     try:
         return st.secrets["tmap"]["app_key"]
     except Exception:
@@ -206,7 +203,7 @@ def format_event_time_str(start_raw: str, end_raw: str) -> str:
 def geocode_address(address: str) -> Optional[Tuple[float, float]]:
     """
     문자열 주소 -> (lon, lat)
-    Google Geocoding 사용 (Tmap은 경로계산만 사용).
+    Google Geocoding 사용
     """
     key = get_maps_api_key()
     if not key or not address.strip():
@@ -234,7 +231,7 @@ def geocode_address(address: str) -> Optional[Tuple[float, float]]:
         return None
 
 
-# ---- Places 자동완성 (Google) ----
+# ---- Places 자동완성 ----
 def places_autocomplete(text: str):
     key = get_maps_api_key()
     if not key or not text.strip():
@@ -269,13 +266,8 @@ def places_autocomplete(text: str):
         return []
 
 
-# ---- Google Distance Matrix (fallback 용) ----
+# ---- Google Distance Matrix (대중교통용) ----
 def get_google_travel_time_minutes(origin: str, dest: str, mode: str) -> Optional[float]:
-    """
-    최후 fallback: Google Distance Matrix.
-    여기서는 절대로 직선거리 근사 안 쓰고,
-    응답이 없으면 그냥 None 반환.
-    """
     key = get_maps_api_key()
     if not key:
         return None
@@ -313,41 +305,50 @@ def get_google_travel_time_minutes(origin: str, dest: str, mode: str) -> Optiona
         return None
 
 
-# ---- Tmap 경로 시간 ----
-def _extract_tmap_total_time_sec(features: List[Dict]) -> Optional[float]:
+# ---- Tmap 경로에서 시간 + 경로 추출 ----
+def _extract_tmap_time_and_path(features: List[Dict]) -> Tuple[Optional[float], List[List[float]]]:
     """
-    Tmap GeoJSON features 배열에서 properties.totalTime(sec) 찾아서 반환
+    features 배열에서 totalTime(sec)와 전체 경로 좌표(lon, lat 리스트)를 추출
     """
+    total_sec: Optional[float] = None
+    path: List[List[float]] = []
+
     for f in features or []:
         props = f.get("properties", {})
-        if "totalTime" in props:
+        if total_sec is None and "totalTime" in props:
             try:
-                return float(props["totalTime"])
+                total_sec = float(props["totalTime"])
             except Exception:
-                continue
-    return None
+                pass
+
+        geom = f.get("geometry", {})
+        if geom.get("type") == "LineString":
+            coords = geom.get("coordinates", [])
+            for c in coords:
+                if isinstance(c, (list, tuple)) and len(c) >= 2:
+                    lon, lat = float(c[0]), float(c[1])
+                    path.append([lon, lat])
+
+    return total_sec, path
 
 
-def get_tmap_travel_time_minutes(origin: str, dest: str, mode: str) -> Optional[float]:
+# ---- Tmap 경로 + 시간 ----
+def get_tmap_route(origin: str, dest: str, mode: str) -> Tuple[Optional[float], Optional[List[List[float]]]]:
     """
     mode: 'driving', 'walking', 'bicycling'
-    - 좌표는 Google Geocoding으로 가져오고
-    - 경로/시간은 Tmap OpenAPI 사용
-    - 자전거는 보행자 totalTime에서 속도 보정 (대략 0.4배) 근사
-      (도로를 따라간다는 점에서 직선거리보다는 훨씬 현실적)
+    반환: (예상시간_분, 경로좌표[ [lon,lat], ... ])
     """
     app_key = get_tmap_app_key()
     if not app_key:
         st.caption("⚠ Tmap appKey가 없어 Tmap 경로 API를 사용할 수 없습니다.")
-        return None
+        return None, None
 
-    # 주소 -> 좌표
     start = geocode_address(origin)
     end = geocode_address(dest)
     if not start or not end:
-        return None
+        return None, None
 
-    start_x, start_y = start  # lon, lat
+    start_x, start_y = start
     end_x, end_y = end
 
     headers = {
@@ -358,7 +359,7 @@ def get_tmap_travel_time_minutes(origin: str, dest: str, mode: str) -> Optional[
 
     try:
         if mode in ("walking", "bicycling"):
-            # 보행자 경로 안내
+            # 보행자 경로
             url = "https://apis.openapi.sk.com/tmap/routes/pedestrian?version=1"
             payload = {
                 "startX": start_x,
@@ -375,23 +376,21 @@ def get_tmap_travel_time_minutes(origin: str, dest: str, mode: str) -> Optional[
             resp = requests.post(url, headers=headers, json=payload, timeout=7)
             if resp.status_code != 200:
                 st.caption(f"Tmap 보행자 경로 API 상태: HTTP {resp.status_code}")
-                return None
+                return None, None
             data = resp.json()
-            total_sec = _extract_tmap_total_time_sec(data.get("features", []))
+            total_sec, path = _extract_tmap_time_and_path(data.get("features", []))
             if total_sec is None:
                 st.caption("Tmap 보행자 응답에 totalTime 정보가 없습니다.")
-                return None
+                return None, None
 
             walk_min = total_sec / 60.0
             if mode == "walking":
-                return walk_min
+                return walk_min, path
             else:
-                # 자전거: 보행 속도의 대략 2.5배 정도로 가정해서 0.4배 근사
-                return walk_min * 0.4
+                # 자전거: 도보보다 약 3배 빠른 정도로 (0.35배)
+                return walk_min * 0.35, path
 
         elif mode == "driving":
-            # 자동차 경로 안내
-            # (경로 URL은 환경에 따라 '/tmap/routes' 또는 '/routes' 일 수 있어서 필요하면 바꿔줘)
             url = "https://apis.openapi.sk.com/tmap/routes?version=1&format=json"
             payload = {
                 "startX": start_x,
@@ -407,97 +406,75 @@ def get_tmap_travel_time_minutes(origin: str, dest: str, mode: str) -> Optional[
             resp = requests.post(url, headers=headers, json=payload, timeout=7)
             if resp.status_code != 200:
                 st.caption(f"Tmap 자동차 경로 API 상태: HTTP {resp.status_code}")
-                return None
+                return None, None
             data = resp.json()
-            total_sec = _extract_tmap_total_time_sec(data.get("features", []))
+            total_sec, path = _extract_tmap_time_and_path(data.get("features", []))
             if total_sec is None:
                 st.caption("Tmap 자동차 응답에 totalTime 정보가 없습니다.")
-                return None
-            return total_sec / 60.0
-
+                return None, None
+            return total_sec / 60.0, path
         else:
-            return None
+            return None, None
+
     except Exception as e:
         st.caption(f"Tmap 경로 요청 중 오류: {e}")
-        return None
+        return None, None
 
 
-# ---- 통합 이동시간 함수 ----
-def get_travel_time_minutes(origin: str, dest: str, mode: str = "transit") -> Optional[float]:
-    """
-    1순위: 자동차/도보/자전거는 Tmap 경로 API
-    2순위: 실패 시 Google Distance Matrix
-    - 직선거리 근사는 절대 사용 안 함
-    """
-    # 1) Tmap 우선 시도
-    if mode in ("driving", "walking", "bicycling"):
-        tmap_min = get_tmap_travel_time_minutes(origin, dest, mode)
-        if tmap_min is not None:
-            return tmap_min
-
-    # 2) Google Distance Matrix fallback
-    if mode == "transit":
-        return get_google_travel_time_minutes(origin, dest, "transit")
-    elif mode == "driving":
-        return get_google_travel_time_minutes(origin, dest, "driving")
-    elif mode == "walking":
-        return get_google_travel_time_minutes(origin, dest, "walking")
-    elif mode == "bicycling":
-        return get_google_travel_time_minutes(origin, dest, "bicycling")
-
-    return None
-
-
-# ---- 지도 Embed (Google Maps) ----
-def render_place_map(query: str, height: int = 320):
-    key = get_maps_api_key()
-    if not key:
+# ---- pydeck으로 경로 지도 그리기 ----
+def render_route_pydeck(path_lonlat: List[List[float]], height: int = 420):
+    if not path_lonlat or len(path_lonlat) < 2:
+        st.caption("경로 선 정보를 가져오지 못했습니다.")
         return
-    q = urllib.parse.quote(query)
-    src = f"https://www.google.com/maps/embed/v1/place?key={key}&q={q}"
-    st.markdown(
-        f"""
-        <iframe
-            width="100%"
-            height="{height}"
-            style="border:0; border-radius: 14px;"
-            loading="lazy"
-            referrerpolicy="no-referrer-when-downgrade"
-            src="{src}">
-        </iframe>
-        """,
-        unsafe_allow_html=True,
+
+    lons = [p[0] for p in path_lonlat]
+    lats = [p[1] for p in path_lonlat]
+    mid_lon = sum(lons) / len(lons)
+    mid_lat = sum(lats) / len(lats)
+
+    route_data = [{"path": path_lonlat}]
+    start_point = {"name": "출발", "lon": path_lonlat[0][0], "lat": path_lonlat[0][1]}
+    end_point = {"name": "도착", "lon": path_lonlat[-1][0], "lat": path_lonlat[-1][1]}
+    points_data = [start_point, end_point]
+
+    layer_route = pdk.Layer(
+        "PathLayer",
+        route_data,
+        get_path="path",
+        get_color=[255, 0, 0],
+        width_scale=1,
+        width_min_pixels=4,
     )
 
-
-def render_directions_map(origin: str, dest: str, mode: str = "transit", height: int = 320):
-    key = get_maps_api_key()
-    if not key:
-        return
-    o = urllib.parse.quote(origin)
-    d = urllib.parse.quote(dest)
-    src = (
-        f"https://www.google.com/maps/embed/v1/directions"
-        f"?key={key}&origin={o}&destination={d}&mode={mode}"
+    layer_points = pdk.Layer(
+        "ScatterplotLayer",
+        points_data,
+        get_position="[lon, lat]",
+        get_radius=70,
+        get_fill_color="[0, 0, 255]",
+        pickable=True,
     )
-    st.markdown(
-        f"""
-        <iframe
-            width="100%"
-            height="{height}"
-            style="border:0; border-radius: 14px;"
-            loading="lazy"
-            referrerpolicy="no-referrer-when-downgrade"
-            src="{src}">
-        </iframe>
-        """,
-        unsafe_allow_html=True,
+
+    view_state = pdk.ViewState(
+        latitude=mid_lat,
+        longitude=mid_lon,
+        zoom=11,
+        bearing=0,
+        pitch=0,
+    )
+
+    st.pydeck_chart(
+        pdk.Deck(
+            layers=[layer_route, layer_points],
+            initial_view_state=view_state,
+            tooltip={"text": "{name}"},
+            height=height,
+        )
     )
 
 
 # ---- 새 일정 시간 미루기 ----
 def shift_last_event(minutes: int):
-    """화면 내부에 저장된 마지막 새 일정(start/end)을 minutes만큼 뒤로 미룸."""
     ev = st.session_state.last_added_event
     if not ev:
         return
@@ -659,10 +636,27 @@ with st.container():
                 st.success("새 일정을 화면 내 목록에 추가했습니다. (Google Calendar에는 쓰지 않습니다.)")
 
     if st.session_state.last_added_event and st.session_state.last_added_event.get("location"):
-        st.markdown("#### 🗺 방금 추가한 일정 위치")
+        st.markdown("#### 🗺 방금 추가한 일정 위치 (Google 지도)")
         loc = st.session_state.last_added_event["location"]
         st.write(f"📍 {loc}")
-        render_place_map(loc)
+        # 위치 단일 지도는 그냥 Google embed 유지 (필요하면 나중에 Tmap으로 바꿀 수 있음)
+        key = get_maps_api_key()
+        if key:
+            q = urllib.parse.quote(loc)
+            src = f"https://www.google.com/maps/embed/v1/place?key={key}&q={q}"
+            st.markdown(
+                f"""
+                <iframe
+                    width="100%"
+                    height="300"
+                    style="border:0; border-radius: 14px;"
+                    loading="lazy"
+                    referrerpolicy="no-referrer-when-downgrade"
+                    src="{src}">
+                </iframe>
+                """,
+                unsafe_allow_html=True,
+            )
     else:
         st.caption("위에서 일정을 추가하면 이곳에 지도가 표시됩니다.")
 
@@ -727,12 +721,20 @@ with st.container():
                 st.warning("새 일정에 장소가 입력되어 있어야 이동경로를 계산할 수 있습니다.")
             else:
                 st.markdown("#### 🗺 이동 경로 지도")
-                render_directions_map(base_loc_text, new_loc_text, mode=mode_value)
 
-                # Distance/ETA 계산
-                origin_param = base_loc_text
-                dest_param = new_loc_text
-                travel_min = get_travel_time_minutes(origin_param, dest_param, mode=mode_value)
+                route_path: Optional[List[List[float]]] = None
+                travel_min: Optional[float] = None
+
+                if mode_value in ("driving", "walking", "bicycling"):
+                    travel_min, route_path = get_tmap_route(base_loc_text, new_loc_text, mode_value)
+                    if route_path:
+                        render_route_pydeck(route_path)
+                    else:
+                        st.caption("경로 좌표를 가져오지 못해 선을 표시하지 못했습니다.")
+                else:
+                    # 대중교통은 일단 시간만 Google에서 가져오고, 지도는 생략
+                    travel_min = get_google_travel_time_minutes(base_loc_text, new_loc_text, "transit")
+                    st.caption("대중교통은 현재 경로 선 표시 없이 예상 시간만 제공합니다.")
 
                 # 일정 간 간격 계산
                 try:
@@ -767,7 +769,7 @@ with st.container():
 
                 delay_min_recommend: Optional[int] = None
 
-                # ✅ 버퍼: 30분으로 축소
+                # ✅ 버퍼 30분
                 if (travel_min is not None) and (gap_min is not None):
                     total_required = travel_min + 30  # 이동 + 30분 버퍼
                     if gap_min >= total_required:
