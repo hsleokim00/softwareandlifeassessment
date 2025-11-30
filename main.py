@@ -881,9 +881,24 @@ with st.container():
 
                 delay_min_recommend: Optional[int] = None
 
-                # 일정이 겹치지 않는 경우
-                if gap_min is not None and gap_min > 0:
-                    st.info("일정이 겹치지 않아 현재 시간대로 진행해도 괜찮아요.")
+              # --- 새 정확한 "겹치지 않음" 판정 로직 ---
+
+                is_same_day = (base_end_dt.date() == new_start_dt.date())
+
+                # 날짜가 다른 날 → 무조건 겹치지 않음
+                if not is_same_day:
+                    st.info("📆 서로 다른 날짜라서 일정이 겹치지 않아요. 그대로 진행해도 됩니다.")
+                else:
+                    if (travel_min is not None) and (gap_min is not None):
+                        # 이동시간 + 여유(30분)
+                        total_need = travel_min + 30
+
+                        if gap_min >= total_need:
+                            st.info(
+                                f"✔ 일정과 이동 시간이 서로 겹치지 않아요. "
+                                f"({gap_min:.0f}분 간격 / 필요 {total_need:.0f}분)"
+                            )
+                        # gap_min > 0이지만 total_need보다 부족한 경우는 아래에서 자동으로 warning 출력됨
 
 
                 # ✅ 버퍼 30분
