@@ -593,6 +593,79 @@ def get_travel_minutes_for_logic(origin: str, dest: str, mode: str = "driving") 
     return int(math.ceil(minutes))
 
 
+# ---- (추가) 이동시간 vs 간격 평가 공통 함수 ----
+BUFFER_MIN = 30  # 이동 후 여유 시간(분)
+
+
+def evaluate_time_gap(move_min: float, gap_min: float, label: str = "선행 일정") -> Dict[str, object]:
+    """
+    이동시간 vs 일정 간 간격 평가
+    - move_min: 이동 시간(분)
+    - gap_min : 선행 일정 종료 -> 새 일정 시작 사이 간격(분)
+    - label   : 선행 일정을 설명하는 라벨 문자열
+
+    반환:
+    {
+        "level": 0|1|2,   # 0: 충분, 1: 빠듯(추천), 2: 실제 겹침/도착 불가(강한 경고)
+        "shortage": int,  # 부족한 분 (0 이상) – '이 정도는 미루는 걸 추천'
+        "msg": str,
+    }
+    """
+
+    # gap_min < 0 이면 이미 시간이 겹쳐 있는 상태
+    if gap_min < 0:
+        overlap = abs(gap_min)
+        msg = (
+            f"{label} 종료 시각과 새 일정 시작 시각이 이미 {overlap:.0f}분만큼 겹쳐 있어요. "
+            f"실제로 시간이 겹치는 상태라, 최소 {overlap:.0f}분 이상은 일정을 조정해야 해요."
+        )
+        return {
+            "level": 2,
+            "shortage": overlap,
+            "msg": msg,
+        }
+
+    # 1) 이동 시간 자체가 간격보다 길면 → 실제로 도착 불가 (강한 경고)
+    if move_min > gap_min:
+        shortage = move_min - gap_min
+        msg = (
+            f"{label} 종료 → 새 일정 시작 사이 간격은 {gap_min:.0f}분인데, "
+            f"이동 시간이 {move_min:.0f}분이라 실제로 시간이 겹쳐요. "
+            f"최소 {shortage:.0f}분 이상은 일정을 미루어야 해요."
+        )
+        return {
+            "level": 2,
+            "shortage": shortage,
+            "msg": msg,
+        }
+
+    # 2) 이동은 가능하지만, 이동 + 여유 30분이 모자람 → 빠듯(추천)
+    if move_min + BUFFER_MIN > gap_min:
+        shortage = (move_min + BUFFER_MIN) - gap_min
+        msg = (
+            f"{label} 종료 → 새 일정 시작 사이 간격은 {gap_min:.0f}분, "
+            f"이동 시간은 {move_min:.0f}분이에요. 이동은 가능하지만, "
+            f"이동 후 여유 {BUFFER_MIN}분까지 생각하면 "
+            f"{shortage:.0f}분 정도 일정을 미루면 더 여유롭겠어요."
+        )
+        return {
+            "level": 1,
+            "shortage": shortage,
+            "msg": msg,
+        }
+
+    # 3) 이동 + 여유까지 모두 충분 → 문제 없음
+    msg = (
+        f"{label} 종료 → 새 일정 시작 사이 간격은 {gap_min:.0f}분, "
+        f"이동 시간은 {move_min:.0f}분이라 여유 {BUFFER_MIN}분까지 포함해도 충분해요."
+    )
+    return {
+        "level": 0,
+        "shortage": 0,
+        "msg": msg,
+    }
+
+
 def compare_two_events_logic(new_ev: Dict, other: Dict, mode: str = "driving") -> Optional[Dict]:
     """
     새로 입력한 일정(new_ev)과 기존 일정(other)을 비교해서
@@ -875,7 +948,7 @@ with st.container():
                     "memo": memo.strip(),
                 }
 
-                # ====== (추가) 새 일정 vs 기존 모든 일정 로직 적용 ======
+                # ====== 새 일정 vs 기존 모든 일정 로직 적용 ======
                 new_start_dt = dt.datetime.combine(date, start_time)
                 new_end_dt = dt.datetime.combine(date, end_time)
                 new_ev_logic = {
@@ -961,7 +1034,6 @@ with st.container():
     st.markdown("</div>", unsafe_allow_html=True)
 
 # ---------- 3. 기존 일정 ↔ 새 일정 거리·시간 비교 ----------
-# ⚠️ 이 부분은 네가 준 원본 코드를 그대로 유지
 with st.container():
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
 
@@ -1103,28 +1175,26 @@ with st.container():
                 else:
                     st.write("- 일정 간 간격을 계산할 수 없습니다.")
 
-                # ====== 추천 로직 ======
+                # ====== 추천 로직 (evaluate_time_gap 사용) ======
                 if (travel_min is not None) and (is_same_day is True) and (gap_min is not None):
-                    # 같은 날짜 + 두 값 다 있을 때만 실행
-                    total_required = travel_min + 30  # 이동 + 30분 버퍼
+                    result_gap = evaluate_time_gap(
+                        move_min=float(travel_min),
+                        gap_min=float(gap_min),
+                        label="기존 일정",
+                    )
 
-                    if gap_min >= total_required:
-                        st.success(
-                            "이동 시간과 30분 여유를 고려했을 때 일정 간 간격이 충분합니다. "
-                            "현재 시간대로 진행해도 무리가 없을 것 같아요."
-                        )
-                        delay_min_recommend = 0
+                    level = result_gap["level"]
+                    shortage = result_gap["shortage"]
+                    msg = result_gap["msg"]
+
+                    delay_min_recommend = int(math.ceil(shortage)) if shortage > 0 else 0
+
+                    if level == 2:
+                        st.error("🚨 2단계 경고 (실제 겹침/도착 불가)\n\n" + msg)
+                    elif level == 1:
+                        st.warning("⚠️ 1단계 알림 (이동 가능하지만 빠듯함)\n\n" + msg)
                     else:
-                        need = total_required - gap_min
-                        # gap_min이 음수(이미 겹치는 경우)면 전체 필요시간만큼 미루게
-                        if gap_min <= 0:
-                            need = total_required
-                        delay_min_recommend = max(1, math.ceil(need))
-                        st.warning(
-                            f"이동 시간에 비해 일정 간 간격이 부족해 보입니다.  \n"
-                            f"30분 여유까지 고려하면 새 일정을 **최소 {delay_min_recommend}분 이상** "
-                            f"뒤로 미루는 게 안전해요."
-                        )
+                        st.success("✅ 문제 없음 (이동 + 여유 30분까지 충분)\n\n" + msg)
 
                 elif (travel_min is not None) and (is_same_day is False):
                     # 날짜가 서로 다르면, 겹칠 수 없으므로 이 한 줄로 끝
