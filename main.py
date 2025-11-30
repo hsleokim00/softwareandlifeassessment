@@ -4,7 +4,7 @@ from typing import Optional, List, Dict, Tuple
 import urllib.parse
 import requests
 import math
-import pydeck as pdk  # 🔹 경로 지도 그리기용
+import streamlit.components.v1 as components
 
 # google API client
 try:
@@ -94,13 +94,13 @@ st.markdown(
 
 # ==================== 세션 상태 ====================
 if "google_events" not in st.session_state:
-    st.session_state.google_events: List[Dict] = []
+    st.session_state.google_events = []
 
 if "custom_events" not in st.session_state:
-    st.session_state.custom_events: List[Dict] = []
+    st.session_state.custom_events = []
 
 if "last_added_event" not in st.session_state:
-    st.session_state.last_added_event: Optional[Dict] = None
+    st.session_state.last_added_event = None
 
 
 # ==================== 공용 함수 ====================
@@ -333,20 +333,20 @@ def _extract_tmap_time_and_path(features: List[Dict]) -> Tuple[Optional[float], 
 
 
 # ---- Tmap 경로 + 시간 ----
-def get_tmap_route(origin: str, dest: str, mode: str) -> Tuple[Optional[float], Optional[List[List[float]]]]:
+def get_tmap_route(origin: str, dest: str, mode: str) -> Tuple[Optional[float], Optional[List[List[float]]], Optional[Tuple[float, float, float, float]]]:
     """
     mode: 'driving', 'walking', 'bicycling'
-    반환: (예상시간_분, 경로좌표[ [lon,lat], ... ])
+    반환: (예상시간_분, 경로좌표[ [lon,lat], ... ], (startX, startY, endX, endY))
     """
     app_key = get_tmap_app_key()
     if not app_key:
         st.caption("⚠ Tmap appKey가 없어 Tmap 경로 API를 사용할 수 없습니다.")
-        return None, None
+        return None, None, None
 
     start = geocode_address(origin)
     end = geocode_address(dest)
     if not start or not end:
-        return None, None
+        return None, None, None
 
     start_x, start_y = start
     end_x, end_y = end
@@ -376,19 +376,19 @@ def get_tmap_route(origin: str, dest: str, mode: str) -> Tuple[Optional[float], 
             resp = requests.post(url, headers=headers, json=payload, timeout=7)
             if resp.status_code != 200:
                 st.caption(f"Tmap 보행자 경로 API 상태: HTTP {resp.status_code}")
-                return None, None
+                return None, None, (start_x, start_y, end_x, end_y)
             data = resp.json()
             total_sec, path = _extract_tmap_time_and_path(data.get("features", []))
             if total_sec is None:
                 st.caption("Tmap 보행자 응답에 totalTime 정보가 없습니다.")
-                return None, None
+                return None, path, (start_x, start_y, end_x, end_y)
 
             walk_min = total_sec / 60.0
             if mode == "walking":
-                return walk_min, path
+                return walk_min, path, (start_x, start_y, end_x, end_y)
             else:
                 # 자전거: 도보보다 약 3배 빠른 정도로 (0.35배)
-                return walk_min * 0.35, path
+                return walk_min * 0.35, path, (start_x, start_y, end_x, end_y)
 
         elif mode == "driving":
             url = "https://apis.openapi.sk.com/tmap/routes?version=1&format=json"
@@ -406,71 +406,163 @@ def get_tmap_route(origin: str, dest: str, mode: str) -> Tuple[Optional[float], 
             resp = requests.post(url, headers=headers, json=payload, timeout=7)
             if resp.status_code != 200:
                 st.caption(f"Tmap 자동차 경로 API 상태: HTTP {resp.status_code}")
-                return None, None
+                return None, None, (start_x, start_y, end_x, end_y)
             data = resp.json()
             total_sec, path = _extract_tmap_time_and_path(data.get("features", []))
             if total_sec is None:
                 st.caption("Tmap 자동차 응답에 totalTime 정보가 없습니다.")
-                return None, None
-            return total_sec / 60.0, path
+                return None, path, (start_x, start_y, end_x, end_y)
+            return total_sec / 60.0, path, (start_x, start_y, end_x, end_y)
         else:
-            return None, None
+            return None, None, (start_x, start_y, end_x, end_y)
 
     except Exception as e:
         st.caption(f"Tmap 경로 요청 중 오류: {e}")
-        return None, None
+        return None, None, (start_x, start_y, end_x, end_y)
 
 
-# ---- pydeck으로 경로 지도 그리기 ----
-def render_route_pydeck(path_lonlat: List[List[float]], height: int = 420):
-    if not path_lonlat or len(path_lonlat) < 2:
-        st.caption("경로 선 정보를 가져오지 못했습니다.")
+# ---- Tmap JS 지도 embed ----
+def render_tmap_route_map(start_x: float, start_y: float, end_x: float, end_y: float, mode: str, height: int = 420):
+    """
+    Tmap JS v2를 사용해 Streamlit 안에 경로 지도 렌더링
+    mode: 'walking', 'bicycling', 'driving'
+    """
+    app_key = get_tmap_app_key()
+    if not app_key:
+        st.caption("⚠ Tmap appKey가 없어 경로 지도를 표시할 수 없습니다.")
         return
 
-    lons = [p[0] for p in path_lonlat]
-    lats = [p[1] for p in path_lonlat]
-    mid_lon = sum(lons) / len(lons)
-    mid_lat = sum(lats) / len(lats)
+    # 보행자/자전거는 pedestrian API, 자동차는 routes API로 구분
+    if mode in ("walking", "bicycling"):
+        route_api = "pedestrian"
+        stroke_color = "#0078ff"
+    else:
+        route_api = "routes"
+        stroke_color = "#dd0000"
 
-    route_data = [{"path": path_lonlat}]
-    start_point = {"name": "출발", "lon": path_lonlat[0][0], "lat": path_lonlat[0][1]}
-    end_point = {"name": "도착", "lon": path_lonlat[-1][0], "lat": path_lonlat[-1][1]}
-    points_data = [start_point, end_point]
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="ko">
+    <head>
+        <meta charset="utf-8" />
+        <script src="https://code.jquery.com/jquery-3.2.1.min.js"></script>
+        <script src="https://apis.openapi.sk.com/tmap/jsv2?version=1&appKey={app_key}"></script>
+        <style>
+            html, body {{
+                margin: 0;
+                padding: 0;
+                width: 100%;
+                height: 100%;
+            }}
+            #map_div {{
+                width: 100%;
+                height: 100%;
+            }}
+        </style>
+    </head>
+    <body>
+        <div id="map_div"></div>
+        <script>
+            var map;
+            var routeLine;
 
-    layer_route = pdk.Layer(
-        "PathLayer",
-        route_data,
-        get_path="path",
-        get_color=[255, 0, 0],
-        width_scale=1,
-        width_min_pixels=4,
-    )
+            function init() {{
+                map = new Tmapv2.Map("map_div", {{
+                    center: new Tmapv2.LatLng({start_y}, {start_x}),
+                    width: "100%",
+                    height: "100%",
+                    zoom: 14
+                }});
 
-    layer_points = pdk.Layer(
-        "ScatterplotLayer",
-        points_data,
-        get_position="[lon, lat]",
-        get_radius=70,
-        get_fill_color="[0, 0, 255]",
-        pickable=True,
-    )
+                var marker_s = new Tmapv2.Marker({{
+                    position: new Tmapv2.LatLng({start_y}, {start_x}),
+                    icon: "/upload/tmap/marker/pin_r_m_s.png",
+                    map: map
+                }});
 
-    view_state = pdk.ViewState(
-        latitude=mid_lat,
-        longitude=mid_lon,
-        zoom=11,
-        bearing=0,
-        pitch=0,
-    )
+                var marker_e = new Tmapv2.Marker({{
+                    position: new Tmapv2.LatLng({end_y}, {end_x}),
+                    icon: "/upload/tmap/marker/pin_r_m_e.png",
+                    map: map
+                }});
 
-    st.pydeck_chart(
-        pdk.Deck(
-            layers=[layer_route, layer_points],
-            initial_view_state=view_state,
-            tooltip={"text": "{name}"},
-            height=height,
-        )
-    )
+                drawRoute();
+            }}
+
+            function drawRoute() {{
+                var headers = {{}};
+                headers["appKey"] = "{app_key}";
+
+                var url;
+                var data;
+
+                if ("{route_api}" === "pedestrian") {{
+                    url = "https://apis.openapi.sk.com/tmap/routes/pedestrian?version=1&format=json";
+                    data = {{
+                        startX: "{start_x}",
+                        startY: "{start_y}",
+                        endX: "{end_x}",
+                        endY: "{end_y}",
+                        reqCoordType: "WGS84GEO",
+                        resCoordType: "EPSG3857"
+                    }};
+                }} else {{
+                    url = "https://apis.openapi.sk.com/tmap/routes?version=1&format=json";
+                    data = {{
+                        startX: "{start_x}",
+                        startY: "{start_y}",
+                        endX: "{end_x}",
+                        endY: "{end_y}",
+                        reqCoordType: "WGS84GEO",
+                        resCoordType: "EPSG3857",
+                        searchOption: 0
+                    }};
+                }}
+
+                $.ajax({{
+                    method: "POST",
+                    url: url,
+                    headers: headers,
+                    data: data,
+                    success: function(response) {{
+                        var resultData = response.features;
+                        var drawInfoArr = [];
+
+                        for (var i = 0; i < resultData.length; i++) {{
+                            var geometry = resultData[i].geometry;
+                            if (geometry.type === "LineString") {{
+                                for (var j = 0; j < geometry.coordinates.length; j++) {{
+                                    var pt = new Tmapv2.Point(geometry.coordinates[j][0], geometry.coordinates[j][1]);
+                                    var geo = Tmapv2.Projection.convertEPSG3857ToWGS84GEO(pt);
+                                    drawInfoArr.push(new Tmapv2.LatLng(geo._lat, geo._lng));
+                                }}
+                            }}
+                        }}
+
+                        if (drawInfoArr.length > 0) {{
+                            routeLine = new Tmapv2.Polyline({{
+                                path: drawInfoArr,
+                                strokeColor: "{stroke_color}",
+                                strokeWeight: 6,
+                                map: map
+                            }});
+
+                            map.setCenter(drawInfoArr[0]);
+                        }}
+                    }},
+                    error: function(request, status, error) {{
+                        console.log("Tmap JS 경로 에러:", request.status, request.responseText, error);
+                    }}
+                }});
+            }}
+
+            window.onload = init;
+        </script>
+    </body>
+    </html>
+    """
+
+    components.html(html, height=height, scrolling=False)
 
 
 # ---- 새 일정 시간 미루기 ----
@@ -639,24 +731,21 @@ with st.container():
         st.markdown("#### 🗺 방금 추가한 일정 위치 (Google 지도)")
         loc = st.session_state.last_added_event["location"]
         st.write(f"📍 {loc}")
-        # 위치 단일 지도는 그냥 Google embed 유지 (필요하면 나중에 Tmap으로 바꿀 수 있음)
         key = get_maps_api_key()
         if key:
             q = urllib.parse.quote(loc)
             src = f"https://www.google.com/maps/embed/v1/place?key={key}&q={q}"
-            st.markdown(
-                f"""
-                <iframe
-                    width="100%"
-                    height="300"
-                    style="border:0; border-radius: 14px;"
-                    loading="lazy"
-                    referrerpolicy="no-referrer-when-downgrade"
-                    src="{src}">
-                </iframe>
-                """,
-                unsafe_allow_html=True,
-            )
+            iframe_html = f"""
+            <iframe
+                width="100%"
+                height="300"
+                style="border:0; border-radius: 14px;"
+                loading="lazy"
+                referrerpolicy="no-referrer-when-downgrade"
+                src="{src}">
+            </iframe>
+            """
+            st.markdown(iframe_html, unsafe_allow_html=True)
     else:
         st.caption("위에서 일정을 추가하면 이곳에 지도가 표시됩니다.")
 
@@ -722,19 +811,42 @@ with st.container():
             else:
                 st.markdown("#### 🗺 이동 경로 지도")
 
-                route_path: Optional[List[List[float]]] = None
                 travel_min: Optional[float] = None
 
                 if mode_value in ("driving", "walking", "bicycling"):
-                    travel_min, route_path = get_tmap_route(base_loc_text, new_loc_text, mode_value)
-                    if route_path:
-                        render_route_pydeck(route_path)
+                    travel_min, route_path, coords = get_tmap_route(base_loc_text, new_loc_text, mode_value)
+                    if coords:
+                        sx, sy, ex, ey = coords
+                        render_tmap_route_map(sx, sy, ex, ey, mode_value)
                     else:
-                        st.caption("경로 좌표를 가져오지 못해 선을 표시하지 못했습니다.")
+                        st.caption("경로 좌표를 가져오지 못해 Tmap 지도를 표시하지 못했습니다.")
                 else:
-                    # 대중교통은 일단 시간만 Google에서 가져오고, 지도는 생략
+                    # 대중교통 → Google 지도 embed + 예상 시간 계산
                     travel_min = get_google_travel_time_minutes(base_loc_text, new_loc_text, "transit")
-                    st.caption("대중교통은 현재 경로 선 표시 없이 예상 시간만 제공합니다.")
+
+                    st.markdown("##### 🚇 대중교통 경로 지도 (Google)")
+
+                    key = get_maps_api_key()
+                    if key:
+                        o = urllib.parse.quote(base_loc_text)
+                        d = urllib.parse.quote(new_loc_text)
+                        src = (
+                            f"https://www.google.com/maps/embed/v1/directions"
+                            f"?key={key}&origin={o}&destination={d}&mode=transit"
+                        )
+                        iframe_html = f"""
+                        <iframe
+                            width="100%"
+                            height="420"
+                            style="border:0; border-radius: 14px;"
+                            loading="lazy"
+                            referrerpolicy="no-referrer-when-downgrade"
+                            src="{src}">
+                        </iframe>
+                        """
+                        st.markdown(iframe_html, unsafe_allow_html=True)
+                    else:
+                        st.caption("⚠ Google Maps API 키가 없어 대중교통 경로 지도를 표시할 수 없습니다.")
 
                 # 일정 간 간격 계산
                 try:
