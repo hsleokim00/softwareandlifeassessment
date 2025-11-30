@@ -392,7 +392,7 @@ def get_tmap_travel_time_minutes(origin: str, dest: str, mode: str) -> Optional[
         elif mode == "driving":
             # 자동차 경로 안내
             # (경로 URL은 환경에 따라 '/tmap/routes' 또는 '/routes' 일 수 있어서 필요하면 바꿔줘)
-            url = "https://apis.openapi.sk.com/tmap/tmap/routes?version=1"
+            url = "https://apis.openapi.sk.com/tmap/routes?version=1&format=json"
             payload = {
                 "startX": start_x,
                 "startY": start_y,
