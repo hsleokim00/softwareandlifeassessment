@@ -848,7 +848,11 @@ with st.container():
                     else:
                         st.caption("⚠ Google Maps API 키가 없어 대중교통 경로 지도를 표시할 수 없습니다.")
 
-                # 일정 간 간격 계산
+                # ---- 일정 간 간격 + 겹침/추천 로직 ----
+                is_same_day: Optional[bool] = None
+                gap_min: Optional[float] = None
+                delay_min_recommend: Optional[int] = None
+
                 try:
                     base_end_dt = parse_iso_or_date(base_event["end_raw"])
                     new_start_dt = dt.datetime.combine(
@@ -856,72 +860,44 @@ with st.container():
                         st.session_state.last_added_event["start_time"],
                     )
 
-                    if base_end_dt.tzinfo is not None:
-                        base_end_dt_naive = base_end_dt.replace(tzinfo=None)
-                    else:
-                        base_end_dt_naive = base_end_dt
+                    # 날짜가 같은 날인지 먼저 체크
+                    is_same_day = (base_end_dt.date() == new_start_dt.date())
 
-                    gap_min = (new_start_dt - base_end_dt_naive).total_seconds() / 60.0
+                    if is_same_day:
+                        # 같은 날일 때만 분 단위 차이 계산
+                        if base_end_dt.tzinfo is not None:
+                            base_end_dt_naive = base_end_dt.replace(tzinfo=None)
+                        else:
+                            base_end_dt_naive = base_end_dt
+
+                        gap_min = (new_start_dt - base_end_dt_naive).total_seconds() / 60.0
+
                 except Exception:
                     gap_min = None
 
                 st.markdown("#### ⏱ 이동 시간 vs 일정 간 간격")
 
+                # 예상 이동 시간 출력
                 if travel_min is not None:
                     st.write(f"- 예상 이동 시간: **약 {travel_min:.0f}분**")
                 else:
                     st.write("- 이동 시간을 계산할 수 없습니다.")
 
+                # 간격 출력 (날짜가 다르면 텍스트만)
                 if gap_min is not None:
                     st.write(
                         f"- 기존 일정 종료 → 새 일정 시작 사이 간격: **약 {gap_min:.0f}분**"
                     )
+                elif is_same_day is False:
+                    st.write("- 기존 일정 종료 → 새 일정 시작 사이 간격: 서로 다른 날짜 (겹치지 않아요)")
                 else:
                     st.write("- 일정 간 간격을 계산할 수 없습니다.")
 
-                    delay_min_recommend: Optional[int] = None
-
-                # 이동·간격 모두 계산된 경우에만 판단
-                if (travel_min is not None) and (gap_min is not None):
-
-                    # 1) 먼저 날짜가 같은 날인지 확인
-                    is_same_day = (base_end_dt.date() == new_start_dt.date())
-
-                    # 1-1) 날짜가 다르면: 겹칠 수 없으므로 여기서 끝
-                    if not is_same_day:
-                        st.info("📅 서로 다른 날짜라서 일정이 겹치지 않아요. 그대로 진행해도 됩니다.")
-                        # ❗ delay_min_recommend는 그대로 None 유지 (버튼/경고 안 뜨게)
-        
-                    # 1-2) 날짜가 같은 날일 때만 '미루기' 추천 로직 실행
-                    else:
-                        # 여유 버퍼 30분
-                        total_required = travel_min + 30  
-
-                        if gap_min >= total_required:
-                            st.success(
-                                "이동 시간과 30분 여유를 고려했을 때 일정 간 간격이 충분합니다. "
-                                "현재 시간대로 진행해도 무리가 없을 것 같아요."
-                            )
-                            delay_min_recommend = 0
-                        else:
-                            # gap이 0 이하(이미 겹치는)인 경우, 최소 전체 필요시간만큼은 미루게끔 보정
-                            need = total_required - gap_min
-                            if gap_min <= 0:
-                                need = total_required
-
-                            delay_min_recommend = max(1, math.ceil(need))
-                            st.warning(
-                                f"이동 시간에 비해 일정 간 간격이 부족해 보입니다.  \n"
-                                f"30분 여유까지 고려하면 새 일정을 **최소 {delay_min_recommend}분 이상** "
-                                f"뒤로 미루는 게 안전해요."
-                            )
-                else:
-                    st.info("이동 시간 또는 일정 간 간격 정보를 충분히 얻지 못해, 텍스트 추천은 생략합니다.")
-
-
-                # ✅ 버퍼 30분
-                if (travel_min is not None) and (gap_min is not None):
+                # ====== 추천 로직 ======
+                if (travel_min is not None) and (is_same_day is True) and (gap_min is not None):
+                    # 같은 날짜 + 두 값 다 있을 때만 실행
                     total_required = travel_min + 30  # 이동 + 30분 버퍼
+
                     if gap_min >= total_required:
                         st.success(
                             "이동 시간과 30분 여유를 고려했을 때 일정 간 간격이 충분합니다. "
@@ -930,13 +906,21 @@ with st.container():
                         delay_min_recommend = 0
                     else:
                         need = total_required - gap_min
+                        # gap_min이 음수(이미 겹치는 경우)면 전체 필요시간만큼 미루게
+                        if gap_min <= 0:
+                            need = total_required
                         delay_min_recommend = max(1, math.ceil(need))
                         st.warning(
                             f"이동 시간에 비해 일정 간 간격이 부족해 보입니다.  \n"
                             f"30분 여유까지 고려하면 새 일정을 **최소 {delay_min_recommend}분 이상** "
                             f"뒤로 미루는 게 안전해요."
                         )
+
+                elif (travel_min is not None) and (is_same_day is False):
+                    # 날짜가 서로 다르면, 겹칠 수 없으므로 이 한 줄로 끝
+                    st.info("📅 서로 다른 날짜라서 일정이 겹치지 않아요. 그대로 진행해도 됩니다.")
                 else:
+                    # 데이터 부족한 경우
                     st.info("이동 시간 또는 일정 간 간격 정보를 충분히 얻지 못해, 텍스트 추천은 생략합니다.")
 
                 # ---- 시간 미루기 버튼들 ----
