@@ -881,6 +881,11 @@ with st.container():
 
                 delay_min_recommend: Optional[int] = None
 
+                # 일정이 겹치지 않는 경우
+                if gap_min is not None and gap_min > 0:
+                    st.info("일정이 겹치지 않아 현재 시간대로 진행해도 괜찮아요.")
+
+
                 # ✅ 버퍼 30분
                 if (travel_min is not None) and (gap_min is not None):
                     total_required = travel_min + 30  # 이동 + 30분 버퍼
