@@ -996,36 +996,6 @@ with st.container():
                     f"선택된 주소: {chosen_desc}  "
                     f"(페이지 {st.session_state.autocomplete_page}/{st.session_state.autocomplete_total_pages})"
                 )
-
-                # ========== 자동완성 페이지 네비게이션 (< 1 | 2 | 3 >) ==========
-                total_pages = st.session_state.autocomplete_total_pages
-                current_page = st.session_state.autocomplete_page
-
-                nav_cols = st.columns(total_pages + 2)
-
-                # ◀ 이전 버튼
-                with nav_cols[0]:
-                    if st.button("◀", key="auto_prev", disabled=(current_page == 1)):
-                        st.session_state.autocomplete_page = current_page - 1
-                        st.experimental_rerun()
-
-                # 페이지 번호 버튼들
-                for i in range(1, total_pages + 1):
-                    with nav_cols[i]:
-                        if st.button(
-                            f"{i}",
-                            key=f"auto_page_{i}",
-                            help=f"{i}페이지 보기",
-                        ):
-                            st.session_state.autocomplete_page = i
-                            st.experimental_rerun()
-
-                # ▶ 다음 버튼
-                with nav_cols[-1]:
-                    if st.button("▶", key="auto_next", disabled=(current_page == total_pages)):
-                        st.session_state.autocomplete_page = current_page + 1
-                        st.experimental_rerun()
-
             else:
                 st.caption("자동완성 결과가 없습니다. 주소를 조금 더 구체적으로 입력해 보세요.")
 
@@ -1065,6 +1035,33 @@ with st.container():
                         ev_id = create_google_event_from_custom(service, new_event)
                         if ev_id:
                             st.success("✅ Google Calendar에도 일정을 저장했습니다!")
+
+    # 🔢 폼 밖: 주소 자동완성 페이지 네비게이션 (< ◀ 1 2 3 ▶ >)
+    if st.session_state.last_loc_input:
+        total_pages = st.session_state.autocomplete_total_pages
+        current_page = st.session_state.autocomplete_page
+        if total_pages > 1:
+            st.markdown("##### 주소 자동완성 페이지 이동")
+            nav_cols = st.columns(total_pages + 2)
+
+            # ◀ 이전
+            with nav_cols[0]:
+                if st.button("◀", key="auto_prev", disabled=(current_page == 1)):
+                    st.session_state.autocomplete_page = current_page - 1
+                    st.experimental_rerun()
+
+            # 1,2,3 번호 버튼
+            for i in range(1, total_pages + 1):
+                with nav_cols[i]:
+                    if st.button(f"{i}", key=f"auto_page_{i}", help=f"{i}페이지 보기"):
+                        st.session_state.autocomplete_page = i
+                        st.experimental_rerun()
+
+            # ▶ 다음
+            with nav_cols[-1]:
+                if st.button("▶", key="auto_next", disabled=(current_page == total_pages)):
+                    st.session_state.autocomplete_page = current_page + 1
+                    st.experimental_rerun()
 
     if st.session_state.last_added_event and st.session_state.last_added_event.get("location"):
         st.markdown("#### 🗺 방금 추가한 일정 위치 (Google 지도)")
