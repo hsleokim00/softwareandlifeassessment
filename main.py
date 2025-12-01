@@ -18,9 +18,11 @@ except ImportError:
 # ==================== 설정 ====================
 
 CALENDAR_ID = "dlspike520@gmail.com"
-SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
+# 🔁 읽기 전용 → 쓰기까지 가능한 권한으로 변경
+SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 DEFAULT_BASE_LOCATION = "하나고등학교"  # 날짜 다를 때 기본 출발 위치
+MAX_PLACE_SUGGESTIONS = 15             # 주소 추천 최대 개수
 
 st.set_page_config(
     page_title="일정? 바로잡 GO!",
@@ -173,6 +175,48 @@ def fetch_google_events(service, calendar_id: str = CALENDAR_ID, max_results: in
     return parsed
 
 
+def create_google_event_from_custom(service, custom_ev: Dict) -> Optional[str]:
+    """
+    화면에서 입력한 custom_ev를 Google Calendar에 실제 이벤트로 생성.
+    성공하면 생성된 이벤트의 id, 실패하면 None 반환.
+    """
+    try:
+        start_dt = dt.datetime.combine(
+            custom_ev["date"],
+            custom_ev["start_time"],
+            tzinfo=dt.timezone(dt.timedelta(hours=9)),
+        )
+        end_dt = dt.datetime.combine(
+            custom_ev["date"],
+            custom_ev["end_time"],
+            tzinfo=dt.timezone(dt.timedelta(hours=9)),
+        )
+
+        body = {
+            "summary": custom_ev["summary"],
+            "location": custom_ev.get("location") or "",
+            "description": custom_ev.get("memo") or "",
+            "start": {
+                "dateTime": start_dt.isoformat(),
+                "timeZone": "Asia/Seoul",
+            },
+            "end": {
+                "dateTime": end_dt.isoformat(),
+                "timeZone": "Asia/Seoul",
+            },
+        }
+
+        ev = (
+            service.events()
+            .insert(calendarId=CALENDAR_ID, body=body)
+            .execute()
+        )
+        return ev.get("id")
+    except Exception as e:
+        st.error(f"Google Calendar에 일정 저장 중 오류가 발생했습니다: {e}")
+        return None
+
+
 # ---- 날짜/시간 ----
 def parse_iso_or_date(s: str) -> dt.datetime:
     if not s:
@@ -233,20 +277,26 @@ def geocode_address(address: str) -> Optional[Tuple[float, float]]:
         return None
 
 
-# ---- Places 자동완성 ----
-def places_autocomplete(text: str):
+# ---- Places 자동완성(확장 버전: Text Search 기반, 최대 15개) ----
+def places_autocomplete(text: str) -> List[Dict]:
+    """
+    입력 문자열을 바탕으로 Google Places Text Search를 이용해
+    최대 MAX_PLACE_SUGGESTIONS개까지 주소/장소를 추천.
+    반환 형태:
+      [{ "description": str, "place_id": str }, ...]
+    """
     key = get_maps_api_key()
     if not key or not text.strip():
         if not key:
             st.warning("⚠ Google Maps API 키가 없습니다. secrets에 google_maps.api_key를 확인해 주세요.")
         return []
 
-    url = "https://maps.googleapis.com/maps/api/place/autocomplete/json"
+    url = "https://maps.googleapis.com/maps/api/place/textsearch/json"
     params = {
-        "input": text,
+        "query": text,
         "key": key,
         "language": "ko",
-        "components": "country:kr",
+        "region": "kr",
     }
 
     try:
@@ -254,17 +304,35 @@ def places_autocomplete(text: str):
         status = data.get("status")
         if status != "OK":
             msg = data.get("error_message", "")
-            st.caption(f"자동완성 API 상태: {status} {(' - ' + msg) if msg else ''}")
+            st.caption(f"장소 검색 API 상태: {status} {(' - ' + msg) if msg else ''}")
             return []
-        return [
-            {
-                "description": p.get("description", ""),
-                "place_id": p.get("place_id"),
-            }
-            for p in data.get("predictions", [])
-        ]
+
+        results = data.get("results", [])[:MAX_PLACE_SUGGESTIONS]
+        suggestions: List[Dict] = []
+
+        for r in results:
+            name = r.get("name", "")
+            addr = r.get("formatted_address", "")
+            place_id = r.get("place_id", "")
+            if not (name or addr):
+                continue
+
+            if name and addr:
+                desc = f"{name} ({addr})"
+            else:
+                desc = name or addr
+
+            suggestions.append(
+                {
+                    "description": desc,
+                    "place_id": place_id,
+                }
+            )
+
+        return suggestions
+
     except Exception as e:
-        st.caption(f"자동완성 요청 중 오류: {e}")
+        st.caption(f"장소 검색 요청 중 오류: {e}")
         return []
 
 
@@ -309,9 +377,6 @@ def get_google_travel_time_minutes(origin: str, dest: str, mode: str) -> Optiona
 
 # ---- Tmap 경로에서 시간 + 경로 추출 ----
 def _extract_tmap_time_and_path(features: List[Dict]) -> Tuple[Optional[float], List[List[float]]]:
-    """
-    features 배열에서 totalTime(sec)와 전체 경로 좌표(lon, lat 리스트)를 추출
-    """
     total_sec: Optional[float] = None
     path: List[List[float]] = []
 
@@ -336,10 +401,6 @@ def _extract_tmap_time_and_path(features: List[Dict]) -> Tuple[Optional[float], 
 
 # ---- Tmap 경로 + 시간 ----
 def get_tmap_route(origin: str, dest: str, mode: str) -> Tuple[Optional[float], Optional[List[List[float]]], Optional[Tuple[float, float, float, float]]]:
-    """
-    mode: 'driving', 'walking', 'bicycling'
-    반환: (예상시간_분, 경로좌표[ [lon,lat], ... ], (startX, startY, endX, endY))
-    """
     app_key = get_tmap_app_key()
     if not app_key:
         st.caption("⚠ Tmap appKey가 없어 Tmap 경로 API를 사용할 수 없습니다.")
@@ -361,7 +422,6 @@ def get_tmap_route(origin: str, dest: str, mode: str) -> Tuple[Optional[float], 
 
     try:
         if mode in ("walking", "bicycling"):
-            # 보행자 경로
             url = "https://apis.openapi.sk.com/tmap/routes/pedestrian?version=1"
             payload = {
                 "startX": start_x,
@@ -389,7 +449,6 @@ def get_tmap_route(origin: str, dest: str, mode: str) -> Tuple[Optional[float], 
             if mode == "walking":
                 return walk_min, path, (start_x, start_y, end_x, end_y)
             else:
-                # 자전거: 도보보다 약 3배 빠른 정도로 (0.35배)
                 return walk_min * 0.35, path, (start_x, start_y, end_x, end_y)
 
         elif mode == "driving":
@@ -425,10 +484,6 @@ def get_tmap_route(origin: str, dest: str, mode: str) -> Tuple[Optional[float], 
 
 # ---- Tmap JS 지도 embed ----
 def render_tmap_route_map(start_x: float, start_y: float, end_x: float, end_y: float, mode: str, height: int = 420):
-    """
-    Tmap JS v2를 사용해 Streamlit 안에 경로 지도 렌더링
-    mode: 'walking', 'bicycling', 'driving'
-    """
     app_key = get_tmap_app_key()
     if not app_key:
         st.caption("⚠ Tmap appKey가 없어 경로 지도를 표시할 수 없습니다.")
@@ -637,7 +692,6 @@ def compare_two_events_logic(new_ev: Dict, other: Dict, mode: str = "driving") -
     if start_new.date() != start_o.date():
         return None
 
-    # 1) 시간이 겹치는지 확인
     if (start_new < end_o) and (start_o < end_new):
         overlap_start = max(start_new, start_o)
         overlap_end = min(end_new, end_o)
@@ -651,7 +705,6 @@ def compare_two_events_logic(new_ev: Dict, other: Dict, mode: str = "driving") -
         k = overlap_min + travel_min + 30
         return {"type": "overlap", "k": max(0, k)}
 
-    # 2) 시간이 안 겹칠 때: 선행/후행
     if end_new <= start_o:
         first, second = new_ev, other
     elif end_o <= start_new:
@@ -720,8 +773,8 @@ def evaluate_new_event_against_all(new_ev_logic: Dict, existing_logic: List[Dict
     }
 
 
-# ---- 새 일정 시간 미루기 (현재 UI에서는 사용 안 함, 로직만 남겨둠) ----
 def shift_last_event(minutes: int):
+    """내부 로직용: 마지막 일정 시간을 분 단위로 미루기 (UI에서는 현재 사용 X)"""
     ev = st.session_state.last_added_event
     if not ev:
         return
@@ -862,6 +915,9 @@ with st.container():
 
         memo = st.text_area("메모 (선택)", placeholder="간단한 메모를 적을 수 있어요.")
 
+        # 🔁 체크하면 Google Calendar에도 같이 저장
+        save_to_google = st.checkbox("이 일정을 내 Google Calendar에도 저장하기", value=False)
+
         submitted_event = st.form_submit_button("➕ 이 일정 화면에 추가")
 
         if submitted_event:
@@ -879,10 +935,20 @@ with st.container():
                     "memo": memo.strip(),
                 }
 
-                # 여기서는 아무 평가 없이 단순히 화면 목록에만 추가
+                # 1) 프로그램 내 목록에 추가 (여기서는 충돌 문구 없이 입력 전용)
                 st.session_state.custom_events.append(new_event)
                 st.session_state.last_added_event = new_event
-                st.success("새 일정을 화면 내 목록에 추가했습니다. (Google Calendar에는 쓰지 않습니다.)")
+                st.success("새 일정을 화면 내 목록에 추가했습니다. (Google Calendar에는 자동으로 쓰지 않습니다.)")
+
+                # 2) 체크된 경우에만 Google Calendar에도 실제 저장
+                if save_to_google:
+                    service, err = get_calendar_service()
+                    if err or not service:
+                        st.error(err or "Google Calendar service 생성 실패")
+                    else:
+                        ev_id = create_google_event_from_custom(service, new_event)
+                        if ev_id:
+                            st.success("✅ Google Calendar에도 일정을 저장했습니다!")
 
     if st.session_state.last_added_event and st.session_state.last_added_event.get("location"):
         st.markdown("#### 🗺 방금 추가한 일정 위치 (Google 지도)")
@@ -923,10 +989,10 @@ with st.container():
     if not calendar_events_with_loc:
         st.info("위치 정보가 있는 Google Calendar 일정이 없습니다.")
     else:
-        # 프로그램에 등록한 새 일정의 '날짜 이후' 일정만 선택 가능하도록 필터링
         ne = st.session_state.last_added_event
         filtered_calendar_events = calendar_events_with_loc
 
+        # 프로그램에 등록한 일정의 날짜 이후 일정만 선택 가능
         if ne:
             new_date = ne["date"]
             tmp = []
@@ -987,7 +1053,6 @@ with st.container():
             if not new_loc_text:
                 st.warning("새 일정에 장소가 입력되어 있어야 이동경로를 계산할 수 있습니다.")
             else:
-                # ---- 일정 시간 관계 계산 (선행/후행 + 날짜 동일 여부) ----
                 is_same_day: Optional[bool] = None
                 gap_min: Optional[float] = None
 
@@ -1031,7 +1096,6 @@ with st.container():
                 except Exception:
                     gap_min = None
 
-                # ---- 출발지 결정 (같은 날짜면 기존 일정 위치, 다른 날짜면 하나고등학교) ----
                 origin_text = base_loc_text
                 origin_label = "기존 일정 위치"
 
@@ -1077,7 +1141,6 @@ with st.container():
                     else:
                         st.caption("⚠ Google Maps API 키가 없어 대중교통 경로 지도를 표시할 수 없습니다.")
 
-                # ---- 이동 시간 vs 간격 텍스트 (선택한 기준 일정 기준 설명) ----
                 st.markdown("#### ⏱ 기준 일정 vs 새 일정 간 간격")
 
                 st.write(f"- 이번 비교에서 출발지는 **{origin_label}** 기준입니다.")
@@ -1101,7 +1164,7 @@ with st.container():
                 else:
                     st.write("- 일정 간 간격을 계산할 수 없습니다.")
 
-                # ---- 하루 전체 일정 기준 종합 평가 ----
+                # ==== 하루 전체 일정 기준 안내 ====
                 st.markdown("#### 📋 하루 전체 일정 기준 안내")
 
                 ne = st.session_state.last_added_event
@@ -1153,7 +1216,7 @@ with st.container():
                 eval_all = evaluate_new_event_against_all(
                     new_ev_logic,
                     existing_logic,
-                    mode=mode_value,
+                    mode=mode_value if mode_value != "transit" else "driving",
                 )
 
                 if eval_all["status"] == "warn":
