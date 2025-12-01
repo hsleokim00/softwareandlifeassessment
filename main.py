@@ -795,9 +795,9 @@ def shift_last_event(minutes: int):
 
 # ==================== UI ====================
 
-st.markdown('<div class="app-title">📅 일정? 바로잡 GO!</div>', unsafe_allow_html=True)
+st.markdown('<div class="app-title">📅 일정? 바로잡GO!</div>', unsafe_allow_html=True)
 st.markdown(
-    '<div class="app-subtitle">Google Calendar 일정과 새 일정을 비교해서 이동시간·간격을 확인합니다.</div>',
+    '<div class="app-subtitle">대한민국에 한하여 작동하는 프로그램입니다.</div>',
     unsafe_allow_html=True,
 )
 
