@@ -22,7 +22,7 @@ CALENDAR_ID = "dlspike520@gmail.com"
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 DEFAULT_BASE_LOCATION = "하나고등학교"  # 날짜 다를 때 기본 출발 위치
-MAX_PLACE_SUGGESTIONS = 15             # 주소 추천 최대 개수
+MAX_PLACE_SUGGESTIONS = 15             # 주소 추천 최대 개수 (상한용)
 
 st.set_page_config(
     page_title="일정? 바로잡 GO!",
@@ -106,6 +106,13 @@ if "custom_events" not in st.session_state:
 if "last_added_event" not in st.session_state:
     st.session_state.last_added_event = None
 
+# 🔢 주소 자동완성 페이지 상태 (1 ~ 3)
+if "autocomplete_page" not in st.session_state:
+    st.session_state.autocomplete_page = 1
+
+if "autocomplete_total_pages" not in st.session_state:
+    st.session_state.autocomplete_total_pages = 1
+
 
 # ==================== 공용 함수 ====================
 
@@ -176,10 +183,7 @@ def fetch_google_events(service, calendar_id: str = CALENDAR_ID, max_results: in
 
 
 def create_google_event_from_custom(service, custom_ev: Dict) -> Optional[str]:
-    """
-    화면에서 입력한 custom_ev를 Google Calendar에 실제 이벤트로 생성.
-    성공하면 생성된 이벤트의 id, 실패하면 None 반환.
-    """
+    """화면에서 입력한 custom_ev를 Google Calendar에 실제 이벤트로 생성"""
     try:
         start_dt = dt.datetime.combine(
             custom_ev["date"],
@@ -247,10 +251,7 @@ def format_event_time_str(start_raw: str, end_raw: str) -> str:
 
 # ---- Google Geocoding ----
 def geocode_address(address: str) -> Optional[Tuple[float, float]]:
-    """
-    문자열 주소 -> (lon, lat)
-    Google Geocoding 사용
-    """
+    """문자열 주소 -> (lon, lat), Google Geocoding 사용"""
     key = get_maps_api_key()
     if not key or not address.strip():
         if not key:
@@ -277,11 +278,43 @@ def geocode_address(address: str) -> Optional[Tuple[float, float]]:
         return None
 
 
-# ---- Places 자동완성(확장 버전: Text Search 기반, 최대 15개) ----
+# ==================== Places 자동완성 (거리 정렬 + 페이징) ====================
+
+PLACES_PER_PAGE = 5          # 한 페이지에 5개
+MAX_AUTO_PAGES = 3           # 최대 3페이지 → 15개
+BASE_ADDRESS_FOR_SORT = "서울특별시 은평구 진관동 연서로 535"
+
+_base_coord_cache: Optional[Tuple[float, float]] = None
+
+
+def _get_base_coord() -> Optional[Tuple[float, float]]:
+    global _base_coord_cache
+    if _base_coord_cache is not None:
+        return _base_coord_cache
+    _base_coord_cache = geocode_address(BASE_ADDRESS_FOR_SORT)
+    return _base_coord_cache
+
+
+def _haversine(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
+    R = 6371.0
+    dlon = math.radians(lon2 - lon1)
+    dlat = math.radians(lat2 - lat1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
+        * math.cos(math.radians(lat2))
+        * math.sin(dlon / 2) ** 2
+    )
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return R * c
+
+
 def places_autocomplete(text: str) -> List[Dict]:
     """
     입력 문자열을 바탕으로 Google Places Text Search를 이용해
-    최대 MAX_PLACE_SUGGESTIONS개까지 주소/장소를 추천.
+    - 최대 15개(5개 × 3페이지)까지 주소/장소를 추천
+    - '서울특별시 은평구 진관동 연서로 535'에서 가까운 순으로 정렬
+    - 현재 페이지(st.session_state.autocomplete_page)에 해당하는 5개만 반환
     반환 형태:
       [{ "description": str, "place_id": str }, ...]
     """
@@ -307,25 +340,73 @@ def places_autocomplete(text: str) -> List[Dict]:
             st.caption(f"장소 검색 API 상태: {status} {(' - ' + msg) if msg else ''}")
             return []
 
-        results = data.get("results", [])[:MAX_PLACE_SUGGESTIONS]
-        suggestions: List[Dict] = []
+        raw = data.get("results", []) or []
+        # 최대 15개까지만 사용
+        raw = raw[: PLACES_PER_PAGE * MAX_AUTO_PAGES]
 
-        for r in results:
+        if not raw:
+            st.session_state.autocomplete_total_pages = 1
+            return []
+
+        base_coord = _get_base_coord()
+        enriched = []
+
+        for r in raw:
             name = r.get("name", "")
             addr = r.get("formatted_address", "")
             place_id = r.get("place_id", "")
+            geom = r.get("geometry", {}).get("location")
+
             if not (name or addr):
                 continue
 
-            if name and addr:
-                desc = f"{name} ({addr})"
-            else:
-                desc = name or addr
+            dist = None
+            if base_coord and geom:
+                try:
+                    lon = float(geom["lng"])
+                    lat = float(geom["lat"])
+                    dist = _haversine(base_coord[0], base_coord[1], lon, lat)
+                except Exception:
+                    dist = None
 
+            enriched.append(
+                {
+                    "name": name,
+                    "addr": addr,
+                    "place_id": place_id,
+                    "distance": dist if dist is not None else 1e9,
+                }
+            )
+
+        # 거리 기준 정렬
+        enriched.sort(key=lambda x: x["distance"])
+
+        total_results = len(enriched)
+        total_pages = max(1, min(MAX_AUTO_PAGES, math.ceil(total_results / PLACES_PER_PAGE)))
+        st.session_state.autocomplete_total_pages = total_pages
+
+        # 현재 페이지 클램프
+        page = int(st.session_state.autocomplete_page)
+        if page < 1:
+            page = 1
+        if page > total_pages:
+            page = total_pages
+        st.session_state.autocomplete_page = page
+
+        start = (page - 1) * PLACES_PER_PAGE
+        end = start + PLACES_PER_PAGE
+        page_results = enriched[start:end]
+
+        suggestions: List[Dict] = []
+        for r in page_results:
+            if r["name"] and r["addr"]:
+                desc = f"{r['name']} ({r['addr']})"
+            else:
+                desc = r["name"] or r["addr"] or ""
             suggestions.append(
                 {
                     "description": desc,
-                    "place_id": place_id,
+                    "place_id": r["place_id"],
                 }
             )
 
@@ -678,12 +759,7 @@ def evaluate_time_gap(move_min: float, gap_min: float, label: str = "선행 일�
 
 
 def compare_two_events_logic(new_ev: Dict, other: Dict, mode: str = "driving") -> Optional[Dict]:
-    """
-    새 일정(new_ev)과 기존 일정(other)을 비교해서
-    - 겹치는 경우: {'type': 'overlap', 'k': ...}
-    - 시간은 안 겹치지만 이동 불가: {'type': 'travel_impossible', 'k': ...}
-    를 반환. 없으면 None.
-    """
+    """새 일정(new_ev)과 기존 일정(other)을 비교"""
     start_new: dt.datetime = new_ev["start"]
     end_new: dt.datetime = new_ev["end"]
     start_o: dt.datetime = other["start"]
@@ -727,9 +803,7 @@ def compare_two_events_logic(new_ev: Dict, other: Dict, mode: str = "driving") -
 
 
 def evaluate_new_event_against_all(new_ev_logic: Dict, existing_logic: List[Dict], mode: str = "driving") -> Dict:
-    """
-    새 일정 vs 기존 모든 일정(하루 전체)을 종합 평가.
-    """
+    """새 일정 vs 기존 모든 일정(하루 전체)을 종합 평가"""
     same_date_found = False
     best_overlap_k = 0
     best_travel_k = 0
@@ -881,6 +955,16 @@ with st.container():
 
     st.markdown("### 2. 새 일정 입력 (주소 자동완성 포함)")
 
+    # 🔢 주소 자동완성 페이지 선택 (1~3)
+    page = st.number_input(
+        "주소 자동완성 페이지",
+        min_value=1,
+        max_value=MAX_AUTO_PAGES,
+        value=int(st.session_state.autocomplete_page),
+        step=1,
+    )
+    st.session_state.autocomplete_page = int(page)
+
     with st.form("add_event_form"):
         title = st.text_input("일정 제목", placeholder="예) 동아리 모임, 학원 수업 등")
         date = st.date_input("날짜", value=today, key="new_event_date")
@@ -909,7 +993,10 @@ with st.container():
                 )
                 chosen_desc = autocomplete_results[chosen_idx]["description"]
                 chosen_place_id = autocomplete_results[chosen_idx]["place_id"]
-                st.caption(f"선택된 주소: {chosen_desc}")
+                st.caption(
+                    f"선택된 주소: {chosen_desc}  "
+                    f"(페이지 {st.session_state.autocomplete_page}/{st.session_state.autocomplete_total_pages})"
+                )
             else:
                 st.caption("자동완성 결과가 없습니다. 주소를 조금 더 구체적으로 입력해 보세요.")
 
