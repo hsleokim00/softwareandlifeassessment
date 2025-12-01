@@ -20,6 +20,8 @@ except ImportError:
 CALENDAR_ID = "dlspike520@gmail.com"
 SCOPES = ["https://www.googleapis.com/auth/calendar.readonly"]
 
+DEFAULT_BASE_LOCATION = "하나고등학교"  # 날짜 다를 때 기본 출발 위치
+
 st.set_page_config(
     page_title="일정? 바로잡 GO!",
     page_icon="📅",
@@ -440,6 +442,7 @@ def render_tmap_route_map(start_x: float, start_y: float, end_x: float, end_y: f
         route_api = "routes"
         stroke_color = "#dd0000"
 
+    # JS에서 appKey를 headers가 아니라 URL 쿼리로 전달 (Tmap 예제 방식)
     html = f"""
     <!DOCTYPE html>
     <html lang="ko">
@@ -490,14 +493,11 @@ def render_tmap_route_map(start_x: float, start_y: float, end_x: float, end_y: f
             }}
 
             function drawRoute() {{
-                var headers = {{}};
-                headers["appKey"] = "{app_key}";
-
                 var url;
                 var data;
 
                 if ("{route_api}" === "pedestrian") {{
-                    url = "https://apis.openapi.sk.com/tmap/routes/pedestrian?version=1&format=json";
+                    url = "https://apis.openapi.sk.com/tmap/routes/pedestrian?version=1&format=json&appKey={app_key}";
                     data = {{
                         startX: "{start_x}",
                         startY: "{start_y}",
@@ -507,7 +507,7 @@ def render_tmap_route_map(start_x: float, start_y: float, end_x: float, end_y: f
                         resCoordType: "EPSG3857"
                     }};
                 }} else {{
-                    url = "https://apis.openapi.sk.com/tmap/routes?version=1&format=json";
+                    url = "https://apis.openapi.sk.com/tmap/routes?version=1&format=json&appKey={app_key}";
                     data = {{
                         startX: "{start_x}",
                         startY: "{start_y}",
@@ -522,7 +522,6 @@ def render_tmap_route_map(start_x: float, start_y: float, end_x: float, end_y: f
                 $.ajax({{
                     method: "POST",
                     url: url,
-                    headers: headers,
                     data: data,
                     success: function(response) {{
                         var resultData = response.features;
@@ -1003,7 +1002,7 @@ with st.container():
                     st.warning(eval_result["message"])
                 else:
                     st.info(eval_result["message"])
-                # ====== 로직 끝, 기존 기능 그대로 유지 ======
+                # ====== 로직 끝 ======
 
                 st.session_state.custom_events.append(new_event)
                 st.session_state.last_added_event = new_event
@@ -1091,49 +1090,15 @@ with st.container():
             if not new_loc_text:
                 st.warning("새 일정에 장소가 입력되어 있어야 이동경로를 계산할 수 있습니다.")
             else:
-                st.markdown("#### 🗺 이동 경로 지도")
-
-                travel_min: Optional[float] = None
-
-                if mode_value in ("driving", "walking", "bicycling"):
-                    travel_min, route_path, coords = get_tmap_route(base_loc_text, new_loc_text, mode_value)
-                    if coords:
-                        sx, sy, ex, ey = coords
-                        render_tmap_route_map(sx, sy, ex, ey, mode_value)
-                    else:
-                        st.caption("경로 좌표를 가져오지 못해 Tmap 지도를 표시하지 못했습니다.")
-                else:
-                    # 대중교통 → Google 지도 embed + 예상 시간 계산
-                    travel_min = get_google_travel_time_minutes(base_loc_text, new_loc_text, "transit")
-
-                    st.markdown("##### 🚇 대중교통 경로 지도 (Google)")
-
-                    key = get_maps_api_key()
-                    if key:
-                        o = urllib.parse.quote(base_loc_text)
-                        d = urllib.parse.quote(new_loc_text)
-                        src = (
-                            f"https://www.google.com/maps/embed/v1/directions"
-                            f"?key={key}&origin={o}&destination={d}&mode=transit"
-                        )
-                        iframe_html = f"""
-                        <iframe
-                            width="100%"
-                            height="420"
-                            style="border:0; border-radius: 14px;"
-                            loading="lazy"
-                            referrerpolicy="no-referrer-when-downgrade"
-                            src="{src}">
-                        </iframe>
-                        """
-                        st.markdown(iframe_html, unsafe_allow_html=True)
-                    else:
-                        st.caption("⚠ Google Maps API 키가 없어 대중교통 경로 지도를 표시할 수 없습니다.")
-
-                # ---- 일정 간 간격 + 겹침/추천 로직 (선행/후행 판단 포함) ----
+                # ---- 일정 시간 관계 계산 (선행/후행 + 날짜 동일 여부) ----
                 is_same_day: Optional[bool] = None
                 gap_min: Optional[float] = None
                 delay_min_recommend: Optional[int] = None
+
+                base_start_dt = None
+                base_end_dt = None
+                new_start_dt = None
+                new_end_dt = None
 
                 try:
                     base_start_dt = parse_iso_or_date(base_event["start_raw"])
@@ -1181,7 +1146,58 @@ with st.container():
                 except Exception:
                     gap_min = None
 
+                # ---- 출발지 결정 (같은 날짜면 기존 일정 위치, 다른 날짜면 하나고등학교) ----
+                origin_text = base_loc_text
+                origin_label = "기존 일정 위치"
+
+                if is_same_day is False:
+                    origin_text = DEFAULT_BASE_LOCATION
+                    origin_label = f"기본 위치({DEFAULT_BASE_LOCATION})"
+
+                st.markdown("#### 🗺 이동 경로 지도")
+
+                travel_min: Optional[float] = None
+
+                if mode_value in ("driving", "walking", "bicycling"):
+                    travel_min, route_path, coords = get_tmap_route(origin_text, new_loc_text, mode_value)
+                    if coords:
+                        sx, sy, ex, ey = coords
+                        render_tmap_route_map(sx, sy, ex, ey, mode_value)
+                    else:
+                        st.caption("경로 좌표를 가져오지 못해 Tmap 지도를 표시하지 못했습니다.")
+                else:
+                    # 대중교통 → Google 지도 embed + 예상 시간 계산
+                    travel_min = get_google_travel_time_minutes(origin_text, new_loc_text, "transit")
+
+                    st.markdown("##### 🚇 대중교통 경로 지도 (Google)")
+
+                    key = get_maps_api_key()
+                    if key:
+                        o = urllib.parse.quote(origin_text)
+                        d = urllib.parse.quote(new_loc_text)
+                        src = (
+                            f"https://www.google.com/maps/embed/v1/directions"
+                            f"?key={key}&origin={o}&destination={d}&mode=transit"
+                        )
+                        iframe_html = f"""
+                        <iframe
+                            width="100%"
+                            height="420"
+                            style="border:0; border-radius: 14px;"
+                            loading="lazy"
+                            referrerpolicy="no-referrer-when-downgrade"
+                            src="{src}">
+                        </iframe>
+                        """
+                        st.markdown(iframe_html, unsafe_allow_html=True)
+                    else:
+                        st.caption("⚠ Google Maps API 키가 없어 대중교통 경로 지도를 표시할 수 없습니다.")
+
+                # ---- 이동 시간 vs 간격 텍스트 ----
                 st.markdown("#### ⏱ 이동 시간 vs 일정 간 간격")
+
+                # 출발지 정보
+                st.write(f"- 이번 비교에서 출발지는 **{origin_label}** 기준입니다.")
 
                 # 예상 이동 시간 출력
                 if travel_min is not None:
@@ -1200,11 +1216,11 @@ with st.container():
                             f"- 선행 일정 종료 → 후행 일정 시작 사이 간격: **약 {gap_min:.0f}분**"
                         )
                 elif is_same_day is False:
-                    st.write("- 서로 다른 날짜의 일정이라 시간상 겹치지 않아요.")
+                    st.write("- 서로 다른 날짜의 일정이라 시간상으로는 겹치지 않습니다.")
                 else:
                     st.write("- 일정 간 간격을 계산할 수 없습니다.")
 
-                # ====== 추천 로직 (evaluate_time_gap 사용) ======
+                # ====== 추천 로직 (evaluate_time_gap 사용: 같은 날짜일 때만) ======
                 if (travel_min is not None) and (is_same_day is True) and (gap_min is not None):
                     result_gap = evaluate_time_gap(
                         move_min=float(travel_min),
@@ -1226,14 +1242,17 @@ with st.container():
                         st.success("✅ 문제 없음 (이동 + 여유 30분까지 충분)\n\n" + msg)
 
                 elif (travel_min is not None) and (is_same_day is False):
-                    # 날짜가 서로 다르면, 겹칠 수 없으므로 이 한 줄로 끝
-                    st.info("📅 서로 다른 날짜라서 일정이 겹치지 않아요. 그대로 진행해도 됩니다.")
+                    # 날짜가 서로 다르면, 일정끼리는 겹치지 않음 + 이동 시간 참고만
+                    st.info(
+                        f"📅 서로 다른 날짜라서 일정끼리는 겹치지 않아요. "
+                        f"다만, **{origin_label} → 새 일정 위치**까지 이동 시간은 위 시간을 참고하세요."
+                    )
                 else:
                     # 데이터 부족한 경우
                     st.info("이동 시간 또는 일정 간 간격 정보를 충분히 얻지 못해, 텍스트 추천은 생략합니다.")
 
-                # ---- 시간 미루기 버튼들 ----
-                if st.session_state.last_added_event and (delay_min_recommend is not None):
+                # ---- 시간 미루기 버튼들 (같은 날짜일 때만 의미 있음) ----
+                if st.session_state.last_added_event and (delay_min_recommend is not None) and (is_same_day is True):
                     col1, col2 = st.columns(2)
 
                     with col1:
