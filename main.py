@@ -788,7 +788,7 @@ def evaluate_new_event_against_all(new_ev_logic: Dict, existing_logic: List[Dict
     }
 
 
-# ---- 새 일정 시간 미루기 ----
+# ---- 새 일정 시간 미루기 (현재 UI에서는 사용하지 않지만, 로직은 남겨둠) ----
 def shift_last_event(minutes: int):
     ev = st.session_state.last_added_event
     if not ev:
@@ -1042,48 +1042,69 @@ with st.container():
         ev for ev in st.session_state.google_events if ev.get("location")
     ]
 
+    base_event = None
+
     if not calendar_events_with_loc:
         st.info("위치 정보가 있는 Google Calendar 일정이 없습니다.")
     else:
-        left, right = st.columns(2)
+        # 프로그램에 등록한 새 일정의 '날짜 이후' 일정만 선택 가능하도록 필터링
+        ne = st.session_state.last_added_event
+        filtered_calendar_events = calendar_events_with_loc
 
-        with left:
-            base_event = st.selectbox(
-                "기준이 될 캘린더 일정 선택",
-                options=calendar_events_with_loc,
-                format_func=lambda ev: f"{ev['summary']} | {format_event_time_str(ev['start_raw'], ev['end_raw'])} | {ev['location']}",
-            )
+        if ne:
+            new_date = ne["date"]
+            tmp = []
+            for ev in calendar_events_with_loc:
+                try:
+                    start_dt = parse_iso_or_date(ev["start_raw"])
+                    if start_dt.date() >= new_date:
+                        tmp.append(ev)
+                except Exception:
+                    continue
+            filtered_calendar_events = tmp
 
-            mode_label, mode_value = st.selectbox(
-                "이동 수단",
-                options=[
-                    ("대중교통", "transit"),
-                    ("자동차", "driving"),
-                    ("도보", "walking"),
-                    ("자전거", "bicycling"),
-                ],
-                format_func=lambda x: x[0],
-            )
+        if ne and not filtered_calendar_events:
+            st.info("프로그램에 등록한 일정 날짜 이후의 캘린더 일정이 없습니다.")
+        else:
+            left, right = st.columns(2)
 
-        with right:
-            ne = st.session_state.last_added_event
-            if ne:
-                st.markdown(
-                    f"""
-                    <div>
-                    <b>새 일정</b><br/>
-                    제목: {ne['summary']}<br/>
-                    날짜: {ne['date']}<br/>
-                    시간: {ne['start_time'].strftime('%H:%M')} ~ {ne['end_time'].strftime('%H:%M')}<br/>
-                    장소: {ne['location'] or '(입력 없음)'}
-                    </div>
-                    """,
-                    unsafe_allow_html=True,
+            with left:
+                base_event = st.selectbox(
+                    "기준이 될 캘린더 일정 선택",
+                    options=filtered_calendar_events,
+                    format_func=lambda ev: f"{ev['summary']} | {format_event_time_str(ev['start_raw'], ev['end_raw'])} | {ev['location']}",
                 )
-            else:
-                st.info("아직 새 일정이 없습니다. 위에서 일정을 하나 추가해 주세요.")
 
-        if st.session_state.last_added_event and base_event:
+                mode_label, mode_value = st.selectbox(
+                    "이동 수단",
+                    options=[
+                        ("대중교통", "transit"),
+                        ("자동차", "driving"),
+                        ("도보", "walking"),
+                        ("자전거", "bicycling"),
+                    ],
+                    format_func=lambda x: x[0],
+                )
+
+            with right:
+                ne = st.session_state.last_added_event
+                if ne:
+                    st.markdown(
+                        f"""
+                        <div>
+                        <b>새 일정</b><br/>
+                        제목: {ne['summary']}<br/>
+                        날짜: {ne['date']}<br/>
+                        시간: {ne['start_time'].strftime('%H:%M')} ~ {ne['end_time'].strftime('%H:%M')}<br/>
+                        장소: {ne['location'] or '(입력 없음)'}
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.info("아직 새 일정이 없습니다. 위에서 일정을 하나 추가해 주세요.")
+
+        if st.session_state.last_added_event and base_event is not None:
             base_loc_text = base_event["location"]
             new_loc_text = st.session_state.last_added_event["location"]
 
@@ -1093,7 +1114,6 @@ with st.container():
                 # ---- 일정 시간 관계 계산 (선행/후행 + 날짜 동일 여부) ----
                 is_same_day: Optional[bool] = None
                 gap_min: Optional[float] = None
-                delay_min_recommend: Optional[int] = None
 
                 base_start_dt = None
                 base_end_dt = None
@@ -1232,8 +1252,6 @@ with st.container():
                     shortage = result_gap["shortage"]
                     msg = result_gap["msg"]
 
-                    delay_min_recommend = int(math.ceil(shortage)) if shortage > 0 else 0
-
                     if level == 2:
                         st.error("🚨 2단계 경고 (실제 겹침/도착 불가)\n\n" + msg)
                     elif level == 1:
@@ -1250,29 +1268,5 @@ with st.container():
                 else:
                     # 데이터 부족한 경우
                     st.info("이동 시간 또는 일정 간 간격 정보를 충분히 얻지 못해, 텍스트 추천은 생략합니다.")
-
-                # ---- 시간 미루기 버튼들 (같은 날짜일 때만 의미 있음) ----
-                if st.session_state.last_added_event and (delay_min_recommend is not None) and (is_same_day is True):
-                    col1, col2 = st.columns(2)
-
-                    with col1:
-                        if delay_min_recommend > 0:
-                            if st.button(
-                                f"⏩ 추천({delay_min_recommend}분)만큼 미루기",
-                                key="btn_shift_recommend",
-                            ):
-                                shift_last_event(delay_min_recommend)
-                                st.success(
-                                    f"새 일정이 추천대로 {delay_min_recommend}분 뒤로 미뤄졌습니다."
-                                )
-                                st.experimental_rerun()
-                        else:
-                            st.caption("이미 30분 여유 이상 확보되어 있어 추가로 미룰 필요는 없어요.")
-
-                    with col2:
-                        if st.button("⏰ 30분 뒤로 미루기", key="btn_shift_30"):
-                            shift_last_event(30)
-                            st.success("새 일정이 30분 뒤로 미뤄졌습니다.")
-                            st.experimental_rerun()
 
     st.markdown("</div>", unsafe_allow_html=True)
