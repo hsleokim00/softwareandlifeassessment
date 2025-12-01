@@ -601,7 +601,7 @@ def evaluate_time_gap(move_min: float, gap_min: float, label: str = "선행 일�
     """
     이동시간 vs 일정 간 간격 평가
     - move_min: 이동 시간(분)
-    - gap_min : 선행 일정 종료 -> 새 일정 시작 사이 간격(분)
+    - gap_min : 선행 일정 종료 -> 후행 일정 시작 사이 간격(분)
     - label   : 선행 일정을 설명하는 라벨 문자열
 
     반환:
@@ -631,7 +631,7 @@ def evaluate_time_gap(move_min: float, gap_min: float, label: str = "선행 일�
         msg = (
             f"{label} 종료 → 새 일정 시작 사이 간격은 {gap_min:.0f}분인데, "
             f"이동 시간이 {move_min:.0f}분이라 실제로 시간이 겹쳐요. "
-            f"최소 {shortage:.0f}분 이상은 일정을 미루어야 해요."
+            f"최소 {shortage:.0f}분 이상 일정을 미루어야 해요."
         )
         return {
             "level": 2,
@@ -1130,29 +1130,53 @@ with st.container():
                     else:
                         st.caption("⚠ Google Maps API 키가 없어 대중교통 경로 지도를 표시할 수 없습니다.")
 
-                # ---- 일정 간 간격 + 겹침/추천 로직 ----
+                # ---- 일정 간 간격 + 겹침/추천 로직 (선행/후행 판단 포함) ----
                 is_same_day: Optional[bool] = None
                 gap_min: Optional[float] = None
                 delay_min_recommend: Optional[int] = None
 
                 try:
+                    base_start_dt = parse_iso_or_date(base_event["start_raw"])
                     base_end_dt = parse_iso_or_date(base_event["end_raw"])
+
+                    new_date = st.session_state.last_added_event["date"]
                     new_start_dt = dt.datetime.combine(
-                        st.session_state.last_added_event["date"],
+                        new_date,
                         st.session_state.last_added_event["start_time"],
                     )
+                    new_end_dt = dt.datetime.combine(
+                        new_date,
+                        st.session_state.last_added_event["end_time"],
+                    )
 
-                    # 날짜가 같은 날인지 먼저 체크
-                    is_same_day = (base_end_dt.date() == new_start_dt.date())
+                    # 타임존 제거
+                    if base_start_dt.tzinfo is not None:
+                        base_start_dt = base_start_dt.replace(tzinfo=None)
+                    if base_end_dt.tzinfo is not None:
+                        base_end_dt = base_end_dt.replace(tzinfo=None)
+
+                    is_same_day = (base_start_dt.date() == new_start_dt.date())
 
                     if is_same_day:
-                        # 같은 날일 때만 분 단위 차이 계산
-                        if base_end_dt.tzinfo is not None:
-                            base_end_dt_naive = base_end_dt.replace(tzinfo=None)
+                        # 1) 시간이 실제로 겹치는지 먼저 확인
+                        if (new_start_dt < base_end_dt) and (base_start_dt < new_end_dt):
+                            overlap_start = max(new_start_dt, base_start_dt)
+                            overlap_end = min(new_end_dt, base_end_dt)
+                            overlap_min = (overlap_end - overlap_start).total_seconds() / 60.0
+                            # 겹친 경우 gap_min을 음수로 전달 → evaluate_time_gap에서 level 2 처리
+                            gap_min = -overlap_min
                         else:
-                            base_end_dt_naive = base_end_dt
+                            # 2) 겹치지 않으면 선행/후행 구분해서 "선행 종료 → 후행 시작" 간격 계산
+                            if base_end_dt <= new_start_dt:
+                                # 기존 일정이 선행, 새 일정이 후행
+                                first_end = base_end_dt
+                                second_start = new_start_dt
+                            else:
+                                # 새 일정이 선행, 기존 일정이 후행
+                                first_end = new_end_dt
+                                second_start = base_start_dt
 
-                        gap_min = (new_start_dt - base_end_dt_naive).total_seconds() / 60.0
+                            gap_min = (second_start - first_end).total_seconds() / 60.0
 
                 except Exception:
                     gap_min = None
@@ -1165,13 +1189,18 @@ with st.container():
                 else:
                     st.write("- 이동 시간을 계산할 수 없습니다.")
 
-                # 간격 출력 (날짜가 다르면 텍스트만)
+                # 간격 출력
                 if gap_min is not None:
-                    st.write(
-                        f"- 기존 일정 종료 → 새 일정 시작 사이 간격: **약 {gap_min:.0f}분**"
-                    )
+                    if gap_min < 0:
+                        st.write(
+                            f"- 기존 일정과 새 일정의 시간이 **약 {abs(gap_min):.0f}분 정도 실제로 겹쳐 있습니다.**"
+                        )
+                    else:
+                        st.write(
+                            f"- 선행 일정 종료 → 후행 일정 시작 사이 간격: **약 {gap_min:.0f}분**"
+                        )
                 elif is_same_day is False:
-                    st.write("- 기존 일정 종료 → 새 일정 시작 사이 간격: 서로 다른 날짜 (겹치지 않아요)")
+                    st.write("- 서로 다른 날짜의 일정이라 시간상 겹치지 않아요.")
                 else:
                     st.write("- 일정 간 간격을 계산할 수 없습니다.")
 
@@ -1180,7 +1209,7 @@ with st.container():
                     result_gap = evaluate_time_gap(
                         move_min=float(travel_min),
                         gap_min=float(gap_min),
-                        label="기존 일정",
+                        label="선행 일정",
                     )
 
                     level = result_gap["level"]
