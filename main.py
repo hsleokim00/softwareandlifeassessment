@@ -434,7 +434,6 @@ def render_tmap_route_map(start_x: float, start_y: float, end_x: float, end_y: f
         st.caption("⚠ Tmap appKey가 없어 경로 지도를 표시할 수 없습니다.")
         return
 
-    # 보행자/자전거는 pedestrian API, 자동차는 routes API로 구분
     if mode in ("walking", "bicycling"):
         route_api = "pedestrian"
         stroke_color = "#0078ff"
@@ -442,7 +441,6 @@ def render_tmap_route_map(start_x: float, start_y: float, end_x: float, end_y: f
         route_api = "routes"
         stroke_color = "#dd0000"
 
-    # JS에서 appKey를 headers가 아니라 URL 쿼리로 전달 (Tmap 예제 방식)
     html = f"""
     <!DOCTYPE html>
     <html lang="ko">
@@ -564,19 +562,13 @@ def render_tmap_route_map(start_x: float, start_y: float, end_x: float, end_y: f
     components.html(html, height=height, scrolling=False)
 
 
-# ==================== (추가) 일정 충돌/이동시간 로직용 유틸 ====================
+# ==================== 이동시간/충돌 로직 유틸 ====================
 
 def to_minutes(delta: dt.timedelta) -> int:
-    """timedelta -> 분 단위 정수"""
     return int(delta.total_seconds() // 60)
 
 
 def get_travel_minutes_for_logic(origin: str, dest: str, mode: str = "driving") -> int:
-    """
-    로직 계산용 이동시간(분).
-    - 기본: 자동차(Tmap driving)
-    - origin/dest 없거나 API 실패 시 0분으로 처리
-    """
     if not origin or not dest:
         return 0
 
@@ -592,39 +584,18 @@ def get_travel_minutes_for_logic(origin: str, dest: str, mode: str = "driving") 
     return int(math.ceil(minutes))
 
 
-# ---- (추가) 이동시간 vs 간격 평가 공통 함수 ----
 BUFFER_MIN = 30  # 이동 후 여유 시간(분)
 
 
 def evaluate_time_gap(move_min: float, gap_min: float, label: str = "선행 일정") -> Dict[str, object]:
-    """
-    이동시간 vs 일정 간 간격 평가
-    - move_min: 이동 시간(분)
-    - gap_min : 선행 일정 종료 -> 후행 일정 시작 사이 간격(분)
-    - label   : 선행 일정을 설명하는 라벨 문자열
-
-    반환:
-    {
-        "level": 0|1|2,   # 0: 충분, 1: 빠듯(추천), 2: 실제 겹침/도착 불가(강한 경고)
-        "shortage": int,  # 부족한 분 (0 이상) – '이 정도는 미루는 걸 추천'
-        "msg": str,
-    }
-    """
-
-    # gap_min < 0 이면 이미 시간이 겹쳐 있는 상태
     if gap_min < 0:
         overlap = abs(gap_min)
         msg = (
             f"{label} 종료 시각과 새 일정 시작 시각이 이미 {overlap:.0f}분만큼 겹쳐 있어요. "
             f"실제로 시간이 겹치는 상태라, 최소 {overlap:.0f}분 이상은 일정을 조정해야 해요."
         )
-        return {
-            "level": 2,
-            "shortage": overlap,
-            "msg": msg,
-        }
+        return {"level": 2, "shortage": overlap, "msg": msg}
 
-    # 1) 이동 시간 자체가 간격보다 길면 → 실제로 도착 불가 (강한 경고)
     if move_min > gap_min:
         shortage = move_min - gap_min
         msg = (
@@ -632,13 +603,8 @@ def evaluate_time_gap(move_min: float, gap_min: float, label: str = "선행 일�
             f"이동 시간이 {move_min:.0f}분이라 실제로 시간이 겹쳐요. "
             f"최소 {shortage:.0f}분 이상 일정을 미루어야 해요."
         )
-        return {
-            "level": 2,
-            "shortage": shortage,
-            "msg": msg,
-        }
+        return {"level": 2, "shortage": shortage, "msg": msg}
 
-    # 2) 이동은 가능하지만, 이동 + 여유 30분이 모자람 → 빠듯(추천)
     if move_min + BUFFER_MIN > gap_min:
         shortage = (move_min + BUFFER_MIN) - gap_min
         msg = (
@@ -647,48 +613,31 @@ def evaluate_time_gap(move_min: float, gap_min: float, label: str = "선행 일�
             f"이동 후 여유 {BUFFER_MIN}분까지 생각하면 "
             f"{shortage:.0f}분 정도 일정을 미루면 더 여유롭겠어요."
         )
-        return {
-            "level": 1,
-            "shortage": shortage,
-            "msg": msg,
-        }
+        return {"level": 1, "shortage": shortage, "msg": msg}
 
-    # 3) 이동 + 여유까지 모두 충분 → 문제 없음
     msg = (
         f"{label} 종료 → 새 일정 시작 사이 간격은 {gap_min:.0f}분, "
         f"이동 시간은 {move_min:.0f}분이라 여유 {BUFFER_MIN}분까지 포함해도 충분해요."
     )
-    return {
-        "level": 0,
-        "shortage": 0,
-        "msg": msg,
-    }
+    return {"level": 0, "shortage": 0, "msg": msg}
 
 
 def compare_two_events_logic(new_ev: Dict, other: Dict, mode: str = "driving") -> Optional[Dict]:
     """
-    새로 입력한 일정(new_ev)과 기존 일정(other)을 비교해서
-    - i-a) 약속 시간이 겹치는 경우:
-        k = (겹치는 시간) + (이동시간) + 30
-    - i-b) 겹치지 않지만 이동시간을 고려하면 도착 불가능한 경우:
-        k = (선행 종료 - 후행 시작 + 이동시간) + 30  (= -gap + travel + 30)
-    를 계산해서 반환.
-
-    반환 예:
-      {'type': 'overlap', 'k': 50}
-      {'type': 'travel_impossible', 'k': 40}
-      문제가 없으면 None
+    새 일정(new_ev)과 기존 일정(other)을 비교해서
+    - 겹치는 경우: {'type': 'overlap', 'k': ...}
+    - 시간은 안 겹치지만 이동 불가: {'type': 'travel_impossible', 'k': ...}
+    를 반환. 없으면 None.
     """
     start_new: dt.datetime = new_ev["start"]
     end_new: dt.datetime = new_ev["end"]
     start_o: dt.datetime = other["start"]
     end_o: dt.datetime = other["end"]
 
-    # 날짜가 다르면 이 둘 사이에서는 충돌 계산 안 함
     if start_new.date() != start_o.date():
         return None
 
-    # 1) 시간이 겹치는지 확인 (i-a)
+    # 1) 시간이 겹치는지 확인
     if (start_new < end_o) and (start_o < end_new):
         overlap_start = max(start_new, start_o)
         overlap_end = min(end_new, end_o)
@@ -702,15 +651,12 @@ def compare_two_events_logic(new_ev: Dict, other: Dict, mode: str = "driving") -
         k = overlap_min + travel_min + 30
         return {"type": "overlap", "k": max(0, k)}
 
-    # 2) 시간이 안 겹칠 때: 선행/후행 구분 (i-b)
+    # 2) 시간이 안 겹칠 때: 선행/후행
     if end_new <= start_o:
-        # new_ev가 선행
         first, second = new_ev, other
     elif end_o <= start_new:
-        # other가 선행
         first, second = other, new_ev
     else:
-        # 이 경우는 논리상 이미 겹치는 케이스라 여기까지 오지 않는 게 정상
         return None
 
     travel_min = get_travel_minutes_for_logic(
@@ -718,28 +664,18 @@ def compare_two_events_logic(new_ev: Dict, other: Dict, mode: str = "driving") -
         second.get("location", ""),
         mode=mode,
     )
-    gap_min = to_minutes(second["start"] - first["end"])  # (후행 시작 - 선행 종료)
+    gap_min = to_minutes(second["start"] - first["end"])
 
-    # 의미상:
-    #   (후행 시작 - 선행 종료 - 이동시간) > 0  → 이동 가능
-    # 코드: gap_min - travel_min > 0 이면 OK
     if gap_min - travel_min > 0:
-        return None  # 이동 가능 → k 필요 없음
+        return None  # 이동 가능
 
-    # 이동 불가능 → k 계산
-    #   k = (선행 종료 - 후행 시작 + 이동시간) + 30 = (-gap_min + travel_min) + 30
     k = (-gap_min + travel_min) + 30
     return {"type": "travel_impossible", "k": max(0, k)}
 
 
 def evaluate_new_event_against_all(new_ev_logic: Dict, existing_logic: List[Dict], mode: str = "driving") -> Dict:
     """
-    새 일정 vs 기존 모든 일정(구글 + 커스텀)을 비교해서
-    i) 경고 & 미루기 추천 / ii) 그대로 등록 추천 을 판정.
-
-    반환 예:
-      {"status": "warn", "k": 60, "message": "..."}
-      {"status": "ok", "message": "..."}
+    새 일정 vs 기존 모든 일정(하루 전체)을 종합 평가.
     """
     same_date_found = False
     best_overlap_k = 0
@@ -758,37 +694,33 @@ def evaluate_new_event_against_all(new_ev_logic: Dict, existing_logic: List[Dict
         elif res["type"] == "travel_impossible":
             best_travel_k = max(best_travel_k, res["k"])
 
-    # ii-a) 같은 날짜 일정 자체가 없을 때
     if not same_date_found:
         return {
             "status": "ok",
-            "message": "겹치는 일정이 없네요! 입력하신 일정을 등록하겠습니다!",
+            "message": "같은 날짜에 다른 일정이 없네요! 입력한 일정은 단독 일정이에요.",
         }
 
-    # i-a) 날짜는 같고, 시간이 실제로 겹치는 일정이 있을 때
     if best_overlap_k > 0:
         return {
             "status": "warn",
             "k": best_overlap_k,
-            "message": f"약속 시간이 겹치네요!! {best_overlap_k}분 만큼 약속을 미루는 것을 추천해요!",
+            "message": f"약속 시간이 겹치는 일정이 있어요. 최소 {best_overlap_k}분 정도는 일정을 미루는 게 안전해요.",
         }
 
-    # i-b) 날짜는 같고, 시간은 안 겹치지만 이동시간 때문에 도착 불가능한 경우
     if best_travel_k > 0:
         return {
             "status": "warn",
             "k": best_travel_k,
-            "message": f"이동 시간을 고려했을 때, 제시간에 도착하지 못할 수도 있어요! {best_travel_k}분 만큼 약속을 미루는 것을 추천해요!",
+            "message": f"시간은 안 겹치지만 이동 시간을 고려하면 빠듯해요. 최소 {best_travel_k}분 정도는 여유 있게 미루는 걸 추천해요.",
         }
 
-    # ii-b) 날짜는 같고, 모든 일정 쌍에 대해 이동 충분
     return {
         "status": "ok",
-        "message": "일정 간 이동이 충분히 가능해요! 입력하신 일정을 등록하겠습니다!!",
+        "message": "하루 전체 일정을 봐도 이동 시간과 여유가 충분해요!",
     }
 
 
-# ---- 새 일정 시간 미루기 (현재 UI에서는 사용하지 않지만, 로직은 남겨둠) ----
+# ---- 새 일정 시간 미루기 (현재 UI에서는 사용 안 함, 로직만 남겨둠) ----
 def shift_last_event(minutes: int):
     ev = st.session_state.last_added_event
     if not ev:
@@ -947,63 +879,7 @@ with st.container():
                     "memo": memo.strip(),
                 }
 
-                # ====== 새 일정 vs 기존 모든 일정 로직 적용 ======
-                new_start_dt = dt.datetime.combine(date, start_time)
-                new_end_dt = dt.datetime.combine(date, end_time)
-                new_ev_logic = {
-                    "start": new_start_dt,
-                    "end": new_end_dt,
-                    "location": final_location,
-                    "source": "program",
-                }
-
-                existing_logic: List[Dict] = []
-
-                # 1) 구글 일정들
-                for gev in st.session_state.google_events:
-                    try:
-                        s = parse_iso_or_date(gev["start_raw"])
-                        e = parse_iso_or_date(gev["end_raw"])
-                        if s.tzinfo is not None:
-                            s = s.replace(tzinfo=None)
-                        if e.tzinfo is not None:
-                            e = e.replace(tzinfo=None)
-                        existing_logic.append(
-                            {
-                                "start": s,
-                                "end": e,
-                                "location": gev.get("location", ""),
-                                "source": "google",
-                            }
-                        )
-                    except Exception:
-                        continue
-
-                # 2) 이미 추가된 커스텀 일정들
-                for cev in st.session_state.custom_events:
-                    s = dt.datetime.combine(cev["date"], cev["start_time"])
-                    e = dt.datetime.combine(cev["date"], cev["end_time"])
-                    existing_logic.append(
-                        {
-                            "start": s,
-                            "end": e,
-                            "location": cev.get("location", ""),
-                            "source": "program",
-                        }
-                    )
-
-                eval_result = evaluate_new_event_against_all(
-                    new_ev_logic,
-                    existing_logic,
-                    mode="driving",
-                )
-
-                if eval_result["status"] == "warn":
-                    st.warning(eval_result["message"])
-                else:
-                    st.info(eval_result["message"])
-                # ====== 로직 끝 ======
-
+                # 여기서는 아무 평가 없이 단순히 화면 목록에만 추가
                 st.session_state.custom_events.append(new_event)
                 st.session_state.last_added_event = new_event
                 st.success("새 일정을 화면 내 목록에 추가했습니다. (Google Calendar에는 쓰지 않습니다.)")
@@ -1115,11 +991,6 @@ with st.container():
                 is_same_day: Optional[bool] = None
                 gap_min: Optional[float] = None
 
-                base_start_dt = None
-                base_end_dt = None
-                new_start_dt = None
-                new_end_dt = None
-
                 try:
                     base_start_dt = parse_iso_or_date(base_event["start_raw"])
                     base_end_dt = parse_iso_or_date(base_event["end_raw"])
@@ -1134,7 +1005,6 @@ with st.container():
                         st.session_state.last_added_event["end_time"],
                     )
 
-                    # 타임존 제거
                     if base_start_dt.tzinfo is not None:
                         base_start_dt = base_start_dt.replace(tzinfo=None)
                     if base_end_dt.tzinfo is not None:
@@ -1143,21 +1013,16 @@ with st.container():
                     is_same_day = (base_start_dt.date() == new_start_dt.date())
 
                     if is_same_day:
-                        # 1) 시간이 실제로 겹치는지 먼저 확인
                         if (new_start_dt < base_end_dt) and (base_start_dt < new_end_dt):
                             overlap_start = max(new_start_dt, base_start_dt)
                             overlap_end = min(new_end_dt, base_end_dt)
                             overlap_min = (overlap_end - overlap_start).total_seconds() / 60.0
-                            # 겹친 경우 gap_min을 음수로 전달 → evaluate_time_gap에서 level 2 처리
                             gap_min = -overlap_min
                         else:
-                            # 2) 겹치지 않으면 선행/후행 구분해서 "선행 종료 → 후행 시작" 간격 계산
                             if base_end_dt <= new_start_dt:
-                                # 기존 일정이 선행, 새 일정이 후행
                                 first_end = base_end_dt
                                 second_start = new_start_dt
                             else:
-                                # 새 일정이 선행, 기존 일정이 후행
                                 first_end = new_end_dt
                                 second_start = base_start_dt
 
@@ -1186,7 +1051,6 @@ with st.container():
                     else:
                         st.caption("경로 좌표를 가져오지 못해 Tmap 지도를 표시하지 못했습니다.")
                 else:
-                    # 대중교통 → Google 지도 embed + 예상 시간 계산
                     travel_min = get_google_travel_time_minutes(origin_text, new_loc_text, "transit")
 
                     st.markdown("##### 🚇 대중교통 경로 지도 (Google)")
@@ -1213,23 +1077,20 @@ with st.container():
                     else:
                         st.caption("⚠ Google Maps API 키가 없어 대중교통 경로 지도를 표시할 수 없습니다.")
 
-                # ---- 이동 시간 vs 간격 텍스트 ----
-                st.markdown("#### ⏱ 이동 시간 vs 일정 간 간격")
+                # ---- 이동 시간 vs 간격 텍스트 (선택한 기준 일정 기준 설명) ----
+                st.markdown("#### ⏱ 기준 일정 vs 새 일정 간 간격")
 
-                # 출발지 정보
                 st.write(f"- 이번 비교에서 출발지는 **{origin_label}** 기준입니다.")
 
-                # 예상 이동 시간 출력
                 if travel_min is not None:
                     st.write(f"- 예상 이동 시간: **약 {travel_min:.0f}분**")
                 else:
                     st.write("- 이동 시간을 계산할 수 없습니다.")
 
-                # 간격 출력
                 if gap_min is not None:
                     if gap_min < 0:
                         st.write(
-                            f"- 기존 일정과 새 일정의 시간이 **약 {abs(gap_min):.0f}분 정도 실제로 겹쳐 있습니다.**"
+                            f"- 기준 일정과 새 일정의 시간이 **약 {abs(gap_min):.0f}분 정도 실제로 겹쳐 있습니다.**"
                         )
                     else:
                         st.write(
@@ -1240,33 +1101,64 @@ with st.container():
                 else:
                     st.write("- 일정 간 간격을 계산할 수 없습니다.")
 
-                # ====== 추천 로직 (evaluate_time_gap 사용: 같은 날짜일 때만) ======
-                if (travel_min is not None) and (is_same_day is True) and (gap_min is not None):
-                    result_gap = evaluate_time_gap(
-                        move_min=float(travel_min),
-                        gap_min=float(gap_min),
-                        label="선행 일정",
+                # ---- 하루 전체 일정 기준 종합 평가 ----
+                st.markdown("#### 📋 하루 전체 일정 기준 안내")
+
+                ne = st.session_state.last_added_event
+                new_start_all = dt.datetime.combine(ne["date"], ne["start_time"])
+                new_end_all = dt.datetime.combine(ne["date"], ne["end_time"])
+
+                new_ev_logic = {
+                    "start": new_start_all,
+                    "end": new_end_all,
+                    "location": ne.get("location", ""),
+                    "source": "program",
+                }
+
+                existing_logic: List[Dict] = []
+
+                # 구글 일정들
+                for gev in st.session_state.google_events:
+                    try:
+                        s = parse_iso_or_date(gev["start_raw"])
+                        e = parse_iso_or_date(gev["end_raw"])
+                        if s.tzinfo is not None:
+                            s = s.replace(tzinfo=None)
+                        if e.tzinfo is not None:
+                            e = e.replace(tzinfo=None)
+                        existing_logic.append(
+                            {
+                                "start": s,
+                                "end": e,
+                                "location": gev.get("location", ""),
+                                "source": "google",
+                            }
+                        )
+                    except Exception:
+                        continue
+
+                # 이미 추가된 커스텀 일정들
+                for cev in st.session_state.custom_events:
+                    s = dt.datetime.combine(cev["date"], cev["start_time"])
+                    e = dt.datetime.combine(cev["date"], cev["end_time"])
+                    existing_logic.append(
+                        {
+                            "start": s,
+                            "end": e,
+                            "location": cev.get("location", ""),
+                            "source": "program",
+                        }
                     )
 
-                    level = result_gap["level"]
-                    shortage = result_gap["shortage"]
-                    msg = result_gap["msg"]
+                eval_all = evaluate_new_event_against_all(
+                    new_ev_logic,
+                    existing_logic,
+                    mode=mode_value,
+                )
 
-                    if level == 2:
-                        st.error("🚨 2단계 경고 (실제 겹침/도착 불가)\n\n" + msg)
-                    elif level == 1:
-                        st.warning("⚠️ 1단계 알림 (이동 가능하지만 빠듯함)\n\n" + msg)
-                    else:
-                        st.success("✅ 문제 없음 (이동 + 여유 30분까지 충분)\n\n" + msg)
-
-                elif (travel_min is not None) and (is_same_day is False):
-                    # 날짜가 서로 다르면, 일정끼리는 겹치지 않음 + 이동 시간 참고만
-                    st.info(
-                        f"📅 서로 다른 날짜라서 일정끼리는 겹치지 않아요. "
-                        f"다만, **{origin_label} → 새 일정 위치**까지 이동 시간은 위 시간을 참고하세요."
-                    )
+                if eval_all["status"] == "warn":
+                    st.warning(eval_all["message"])
                 else:
-                    # 데이터 부족한 경우
-                    st.info("이동 시간 또는 일정 간 간격 정보를 충분히 얻지 못해, 텍스트 추천은 생략합니다.")
+                    st.success(eval_all["message"])
 
     st.markdown("</div>", unsafe_allow_html=True)
