@@ -1122,7 +1122,11 @@ with st.container():
         )
 
         if not st.session_state.google_events and not st.session_state.custom_events:
-            st.info("다른 비교 대상 일정이 없습니다. 1번 섹션에서 Google Calendar 일정을 불러오거나, 2번 섹션에서 다른 일정을 더 추가해 보세요.")
+            st.info(
+                "다른 비교 대상 일정이 없습니다. "
+                "1번 섹션에서 Google Calendar 일정을 불러오거나, "
+                "2번 섹션에서 다른 일정을 더 추가해 보세요."
+            )
             st.markdown("</div>", unsafe_allow_html=True)
         else:
             # 2) 같은 날짜의 모든 일정 수집 (새 일정 기준)
@@ -1194,7 +1198,7 @@ with st.container():
                     st.markdown(
                         f"- [{ev['source']}] **{ev['summary']}** — "
                         f"{ev['start'].strftime('%H:%M')} ~ {ev['end'].strftime('%H:%M')} "
-                        f" / 📍 {ev.get('location') or '(장소 없음)'}"
+                        f"/ 📍 {ev.get('location') or '(장소 없음)'}"
                     )
 
                 # 4) 이전/다음 일정과의 이동 시간·간격 계산
@@ -1206,7 +1210,8 @@ with st.container():
                     dest = ev_to.get("location") or ""
                     if not origin or not dest:
                         st.write(
-                            f"- **{label_from} → {label_to}**: 한쪽 일정에 장소 정보가 없어 이동시간을 계산할 수 없습니다."
+                            f"- **{label_from} → {label_to}**: "
+                            "한쪽 일정에 장소 정보가 없어 이동시간을 계산할 수 없습니다."
                         )
                         return None
 
@@ -1219,10 +1224,12 @@ with st.container():
                     result = evaluate_time_gap(move_min, gap_min, label=label_from)
 
                     st.write(
-                        f"- **{label_from} → {label_to}**  
-                          · 이동 시간: 약 **{move_min}분**  
-                          · 시간 간격: 약 **{gap_min}분**  
-                          · 판단: {result['msg']}"
+                        (
+                            f"- **{label_from} → {label_to}**  \n"
+                            f"  · 이동 시간: 약 **{move_min}분**  \n"
+                            f"  · 시간 간격: 약 **{gap_min}분**  \n"
+                            f"  · 판단: {result['msg']}"
+                        )
                     )
                     return result
 
@@ -1230,20 +1237,30 @@ with st.container():
                 next_eval = None
 
                 if prev_event:
-                    prev_eval = describe_link("이전 일정", "새 일정", prev_event, {
-                        "start": new_start,
-                        "end": new_end,
-                        "location": new_loc,
-                    })
+                    prev_eval = describe_link(
+                        "이전 일정",
+                        "새 일정",
+                        prev_event,
+                        {
+                            "start": new_start,
+                            "end": new_end,
+                            "location": new_loc,
+                        },
+                    )
                 else:
                     st.write("- 새 일정 앞에 있는 다른 일정이 없습니다.")
 
                 if next_event:
-                    next_eval = describe_link("새 일정", "다음 일정", {
-                        "start": new_start,
-                        "end": new_end,
-                        "location": new_loc,
-                    }, next_event)
+                    next_eval = describe_link(
+                        "새 일정",
+                        "다음 일정",
+                        {
+                            "start": new_start,
+                            "end": new_end,
+                            "location": new_loc,
+                        },
+                        next_event,
+                    )
                 else:
                     st.write("- 새 일정 뒤에 있는 다른 일정이 없습니다.")
 
@@ -1259,7 +1276,13 @@ with st.container():
                     dest_text = None
                     waypoint_text = None
 
-                    if prev_event and prev_event.get("location") and next_event and next_event.get("location") and new_loc:
+                    if (
+                        prev_event
+                        and prev_event.get("location")
+                        and next_event
+                        and next_event.get("location")
+                        and new_loc
+                    ):
                         origin_text = prev_event["location"]
                         dest_text = next_event["location"]
                         waypoint_text = new_loc
@@ -1274,7 +1297,6 @@ with st.container():
                         o = urllib.parse.quote(origin_text)
                         d = urllib.parse.quote(dest_text)
 
-                        # embed 모드 문자열
                         embed_mode = "driving"
                         if mode_value in ("walking", "bicycling", "transit"):
                             embed_mode = mode_value
@@ -1305,7 +1327,9 @@ with st.container():
                         """
                         st.markdown(iframe_html, unsafe_allow_html=True)
                     else:
-                        st.caption("이전/다음 일정 또는 새 일정의 장소 정보가 부족해 경유지 지도를 그릴 수 없습니다.")
+                        st.caption(
+                            "이전/다음 일정 또는 새 일정의 장소 정보가 부족해 경유지 지도를 그릴 수 없습니다."
+                        )
 
                 # 6) 하루 전체 일정 기준 종합 평가 + Google Calendar 반영 버튼
                 st.markdown("#### 📋 하루 전체 일정 기준 종합 평가 및 캘린더 저장")
@@ -1382,7 +1406,6 @@ with st.container():
                 # 6-2) 경고 + 추천 k분이 있는 경우: k분 뒤로 미룬 시간으로 저장
                 k = eval_all.get("k", 0) if eval_all.get("status") == "warn" else 0
                 if k and k > 0:
-                    # 미룬 시간 미리 계산해서 보여주기
                     shift_delta = dt.timedelta(minutes=int(k))
                     shifted_start_dt = new_start + shift_delta
                     shifted_end_dt = new_end + shift_delta
@@ -1400,14 +1423,12 @@ with st.container():
                                 st.error(err or "Google Calendar service 생성 실패")
                             else:
                                 shifted_event = ne.copy()
-                                shifted_event_start = shifted_start_dt
-                                shifted_event_end = shifted_end_dt
-                                shifted_event["date"] = shifted_event_start.date()
-                                shifted_event["start_time"] = shifted_event_start.time()
-                                shifted_event["end_time"] = shifted_event_end.time()
+                                shifted_event["date"] = shifted_start_dt.date()
+                                shifted_event["start_time"] = shifted_start_dt.time()
+                                shifted_event["end_time"] = shifted_end_dt.time()
 
                                 ev_id = create_google_event_from_custom(service, shifted_event)
                                 if ev_id:
                                     st.success("✅ 추천 시간으로 Google Calendar에 저장했습니다!")
 
-        st.markdown("</div>", unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
