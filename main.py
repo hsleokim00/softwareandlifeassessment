@@ -113,6 +113,9 @@ if "autocomplete_page" not in st.session_state:
 if "autocomplete_total_pages" not in st.session_state:
     st.session_state.autocomplete_total_pages = 1
 
+if "last_loc_input" not in st.session_state:
+    st.session_state.last_loc_input = ""
+
 
 # ==================== 공용 함수 ====================
 
@@ -955,16 +958,6 @@ with st.container():
 
     st.markdown("### 2. 새 일정 입력 (주소 자동완성 포함)")
 
-    # 🔢 주소 자동완성 페이지 선택 (1~3)
-    page = st.number_input(
-        "주소 자동완성 페이지",
-        min_value=1,
-        max_value=MAX_AUTO_PAGES,
-        value=int(st.session_state.autocomplete_page),
-        step=1,
-    )
-    st.session_state.autocomplete_page = int(page)
-
     with st.form("add_event_form"):
         title = st.text_input("일정 제목", placeholder="예) 동아리 모임, 학원 수업 등")
         date = st.date_input("날짜", value=today, key="new_event_date")
@@ -982,8 +975,14 @@ with st.container():
         chosen_desc: Optional[str] = None
         chosen_place_id: Optional[str] = None
 
-        if loc_input.strip():
-            autocomplete_results = places_autocomplete(loc_input.strip())
+        # 입력이 바뀌면 자동완성 페이지 1로 초기화
+        current_input = loc_input.strip()
+        if st.session_state.last_loc_input != current_input:
+            st.session_state.autocomplete_page = 1
+            st.session_state.last_loc_input = current_input
+
+        if current_input:
+            autocomplete_results = places_autocomplete(current_input)
             if autocomplete_results:
                 chosen_idx = st.radio(
                     "주소 자동완성 결과",
@@ -997,6 +996,36 @@ with st.container():
                     f"선택된 주소: {chosen_desc}  "
                     f"(페이지 {st.session_state.autocomplete_page}/{st.session_state.autocomplete_total_pages})"
                 )
+
+                # ========== 자동완성 페이지 네비게이션 (< 1 | 2 | 3 >) ==========
+                total_pages = st.session_state.autocomplete_total_pages
+                current_page = st.session_state.autocomplete_page
+
+                nav_cols = st.columns(total_pages + 2)
+
+                # ◀ 이전 버튼
+                with nav_cols[0]:
+                    if st.button("◀", key="auto_prev", disabled=(current_page == 1)):
+                        st.session_state.autocomplete_page = current_page - 1
+                        st.experimental_rerun()
+
+                # 페이지 번호 버튼들
+                for i in range(1, total_pages + 1):
+                    with nav_cols[i]:
+                        if st.button(
+                            f"{i}",
+                            key=f"auto_page_{i}",
+                            help=f"{i}페이지 보기",
+                        ):
+                            st.session_state.autocomplete_page = i
+                            st.experimental_rerun()
+
+                # ▶ 다음 버튼
+                with nav_cols[-1]:
+                    if st.button("▶", key="auto_next", disabled=(current_page == total_pages)):
+                        st.session_state.autocomplete_page = current_page + 1
+                        st.experimental_rerun()
+
             else:
                 st.caption("자동완성 결과가 없습니다. 주소를 조금 더 구체적으로 입력해 보세요.")
 
@@ -1022,7 +1051,7 @@ with st.container():
                     "memo": memo.strip(),
                 }
 
-                # 1) 프로그램 내 목록에 추가 (여기서는 충돌 문구 없이 입력 전용)
+                # 1) 프로그램 내 목록에 추가
                 st.session_state.custom_events.append(new_event)
                 st.session_state.last_added_event = new_event
                 st.success("새 일정을 화면 내 목록에 추가했습니다. (Google Calendar에는 자동으로 쓰지 않습니다.)")
