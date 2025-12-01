@@ -1090,156 +1090,209 @@ with st.container():
 # ---------- 3. 기존 일정 ↔ 새 일정 거리·시간 비교 ----------
 with st.container():
     st.markdown('<div class="section-card">', unsafe_allow_html=True)
-
     st.markdown("### 3. 기존 일정 ↔ 새 일정 거리·시간 비교")
 
-    calendar_events_with_loc = [
-        ev for ev in st.session_state.google_events if ev.get("location")
-    ]
+    # 이동 수단 선택 (하루 전체 비교 + 지도에 공통으로 사용)
+    mode_label, mode_value = st.selectbox(
+        "이동 수단",
+        options=[
+            ("대중교통", "transit"),
+            ("자동차", "driving"),
+            ("도보", "walking"),
+            ("자전거", "bicycling"),
+        ],
+        format_func=lambda x: x[0],
+    )
 
-    base_event = None
+    ne = st.session_state.last_added_event
 
-    if not calendar_events_with_loc:
-        st.info("위치 정보가 있는 Google Calendar 일정이 없습니다.")
+    if not ne:
+        st.info("아직 새 일정이 없습니다. 위 2번 섹션에서 일정을 하나 추가해 주세요.")
+        st.markdown("</div>", unsafe_allow_html=True)
     else:
-        ne = st.session_state.last_added_event
-        filtered_calendar_events = calendar_events_with_loc
+        # 1) 새 일정 정보 출력
+        st.markdown("#### 🆕 새 일정 요약")
+        st.markdown(
+            f"""
+            - 제목: **{ne['summary']}**  
+            - 날짜: **{ne['date']}**  
+            - 시간: **{ne['start_time'].strftime('%H:%M')} ~ {ne['end_time'].strftime('%H:%M')}**  
+            - 장소: **{ne['location'] or '(입력 없음)'}**
+            """.strip()
+        )
 
-        # 프로그램에 등록한 일정의 날짜 이후 일정만 선택 가능
-        if ne:
+        if not st.session_state.google_events and not st.session_state.custom_events:
+            st.info("다른 비교 대상 일정이 없습니다. 1번 섹션에서 Google Calendar 일정을 불러오거나, 2번 섹션에서 다른 일정을 더 추가해 보세요.")
+            st.markdown("</div>", unsafe_allow_html=True)
+        else:
+            # 2) 같은 날짜의 모든 일정 수집 (새 일정 기준)
             new_date = ne["date"]
-            tmp = []
-            for ev in calendar_events_with_loc:
+            new_start = dt.datetime.combine(new_date, ne["start_time"])
+            new_end = dt.datetime.combine(new_date, ne["end_time"])
+            new_loc = ne.get("location", "")
+
+            same_day_events: List[Dict] = []
+
+            # Google Calendar 일정
+            for gev in st.session_state.google_events:
                 try:
-                    start_dt = parse_iso_or_date(ev["start_raw"])
-                    if start_dt.date() >= new_date:
-                        tmp.append(ev)
+                    s = parse_iso_or_date(gev["start_raw"])
+                    e = parse_iso_or_date(gev["end_raw"])
+                    if s.tzinfo is not None:
+                        s = s.replace(tzinfo=None)
+                    if e.tzinfo is not None:
+                        e = e.replace(tzinfo=None)
+                    if s.date() == new_date:
+                        same_day_events.append(
+                            {
+                                "summary": gev["summary"],
+                                "start": s,
+                                "end": e,
+                                "location": gev.get("location", ""),
+                                "source": "google",
+                            }
+                        )
                 except Exception:
                     continue
-            filtered_calendar_events = tmp
 
-        if ne and not filtered_calendar_events:
-            st.info("프로그램에 등록한 일정 날짜 이후의 캘린더 일정이 없습니다.")
-        else:
-            left, right = st.columns(2)
-
-            with left:
-                base_event = st.selectbox(
-                    "기준이 될 캘린더 일정 선택",
-                    options=filtered_calendar_events,
-                    format_func=lambda ev: f"{ev['summary']} | {format_event_time_str(ev['start_raw'], ev['end_raw'])} | {ev['location']}",
-                )
-
-                mode_label, mode_value = st.selectbox(
-                    "이동 수단",
-                    options=[
-                        ("대중교통", "transit"),
-                        ("자동차", "driving"),
-                        ("도보", "walking"),
-                        ("자전거", "bicycling"),
-                    ],
-                    format_func=lambda x: x[0],
-                )
-
-            with right:
-                ne = st.session_state.last_added_event
-                if ne:
-                    st.markdown(
-                        f"""
-                        <div>
-                        <b>새 일정</b><br/>
-                        제목: {ne['summary']}<br/>
-                        날짜: {ne['date']}<br/>
-                        시간: {ne['start_time'].strftime('%H:%M')} ~ {ne['end_time'].strftime('%H:%M')}<br/>
-                        장소: {ne['location'] or '(입력 없음)'}
-                        </div>
-                        """,
-                        unsafe_allow_html=True,
+            # 커스텀 일정 (last_added_event 제외)
+            for cev in st.session_state.custom_events:
+                s = dt.datetime.combine(cev["date"], cev["start_time"])
+                e = dt.datetime.combine(cev["date"], cev["end_time"])
+                if cev is st.session_state.last_added_event:
+                    continue
+                if cev["date"] == new_date:
+                    same_day_events.append(
+                        {
+                            "summary": cev["summary"],
+                            "start": s,
+                            "end": e,
+                            "location": cev.get("location", ""),
+                            "source": "program",
+                        }
                     )
-                else:
-                    st.info("아직 새 일정이 없습니다. 위에서 일정을 하나 추가해 주세요.")
 
-        if st.session_state.last_added_event and base_event is not None:
-            base_loc_text = base_event["location"]
-            new_loc_text = st.session_state.last_added_event["location"]
-
-            if not new_loc_text:
-                st.warning("새 일정에 장소가 입력되어 있어야 이동경로를 계산할 수 있습니다.")
+            if not same_day_events:
+                st.info("같은 날짜에 다른 일정이 없어, 경로를 비교할 대상이 없습니다.")
             else:
-                is_same_day: Optional[bool] = None
-                gap_min: Optional[float] = None
+                # 3) 타임라인 정렬 + 바로 앞/뒤 일정 찾기
+                same_day_events.sort(key=lambda x: x["start"])
 
-                try:
-                    base_start_dt = parse_iso_or_date(base_event["start_raw"])
-                    base_end_dt = parse_iso_or_date(base_event["end_raw"])
+                prev_event = None
+                next_event = None
 
-                    new_date = st.session_state.last_added_event["date"]
-                    new_start_dt = dt.datetime.combine(
-                        new_date,
-                        st.session_state.last_added_event["start_time"],
+                for ev in same_day_events:
+                    if ev["end"] <= new_start:
+                        if (prev_event is None) or (ev["end"] > prev_event["end"]):
+                            prev_event = ev
+                    if ev["start"] >= new_end:
+                        if (next_event is None) or (ev["start"] < next_event["start"]):
+                            next_event = ev
+
+                st.markdown("#### 📆 같은 날짜의 일정 타임라인")
+                for ev in same_day_events:
+                    st.markdown(
+                        f"- [{ev['source']}] **{ev['summary']}** — "
+                        f"{ev['start'].strftime('%H:%M')} ~ {ev['end'].strftime('%H:%M')} "
+                        f" / 📍 {ev.get('location') or '(장소 없음)'}"
                     )
-                    new_end_dt = dt.datetime.combine(
-                        new_date,
-                        st.session_state.last_added_event["end_time"],
-                    )
 
-                    if base_start_dt.tzinfo is not None:
-                        base_start_dt = base_start_dt.replace(tzinfo=None)
-                    if base_end_dt.tzinfo is not None:
-                        base_end_dt = base_end_dt.replace(tzinfo=None)
+                # 4) 이전/다음 일정과의 이동 시간·간격 계산
+                st.markdown("#### ⏱ 이전·다음 일정과 이동 가능 여부")
 
-                    is_same_day = (base_start_dt.date() == new_start_dt.date())
-
-                    if is_same_day:
-                        if (new_start_dt < base_end_dt) and (base_start_dt < new_end_dt):
-                            overlap_start = max(new_start_dt, base_start_dt)
-                            overlap_end = min(new_end_dt, base_end_dt)
-                            overlap_min = (overlap_end - overlap_start).total_seconds() / 60.0
-                            gap_min = -overlap_min
-                        else:
-                            if base_end_dt <= new_start_dt:
-                                first_end = base_end_dt
-                                second_start = new_start_dt
-                            else:
-                                first_end = new_end_dt
-                                second_start = base_start_dt
-
-                            gap_min = (second_start - first_end).total_seconds() / 60.0
-
-                except Exception:
-                    gap_min = None
-
-                origin_text = base_loc_text
-                origin_label = "기존 일정 위치"
-
-                if is_same_day is False:
-                    origin_text = DEFAULT_BASE_LOCATION
-                    origin_label = f"기본 위치({DEFAULT_BASE_LOCATION})"
-
-                st.markdown("#### 🗺 이동 경로 지도")
-
-                travel_min: Optional[float] = None
-
-                if mode_value in ("driving", "walking", "bicycling"):
-                    travel_min, route_path, coords = get_tmap_route(origin_text, new_loc_text, mode_value)
-                    if coords:
-                        sx, sy, ex, ey = coords
-                        render_tmap_route_map(sx, sy, ex, ey, mode_value)
-                    else:
-                        st.caption("경로 좌표를 가져오지 못해 Tmap 지도를 표시하지 못했습니다.")
-                else:
-                    travel_min = get_google_travel_time_minutes(origin_text, new_loc_text, "transit")
-
-                    st.markdown("##### 🚇 대중교통 경로 지도 (Google)")
-
-                    key = get_maps_api_key()
-                    if key:
-                        o = urllib.parse.quote(origin_text)
-                        d = urllib.parse.quote(new_loc_text)
-                        src = (
-                            f"https://www.google.com/maps/embed/v1/directions"
-                            f"?key={key}&origin={o}&destination={d}&mode=transit"
+                def describe_link(label_from: str, label_to: str, ev_from: Dict, ev_to: Dict):
+                    """ev_from → ev_to 이동에 대해 설명"""
+                    origin = ev_from.get("location") or ""
+                    dest = ev_to.get("location") or ""
+                    if not origin or not dest:
+                        st.write(
+                            f"- **{label_from} → {label_to}**: 한쪽 일정에 장소 정보가 없어 이동시간을 계산할 수 없습니다."
                         )
+                        return None
+
+                    move_min = get_travel_minutes_for_logic(
+                        origin,
+                        dest,
+                        mode=mode_value if mode_value != "transit" else "driving",
+                    )
+                    gap_min = to_minutes(ev_to["start"] - ev_from["end"])
+                    result = evaluate_time_gap(move_min, gap_min, label=label_from)
+
+                    st.write(
+                        f"- **{label_from} → {label_to}**  
+                          · 이동 시간: 약 **{move_min}분**  
+                          · 시간 간격: 약 **{gap_min}분**  
+                          · 판단: {result['msg']}"
+                    )
+                    return result
+
+                prev_eval = None
+                next_eval = None
+
+                if prev_event:
+                    prev_eval = describe_link("이전 일정", "새 일정", prev_event, {
+                        "start": new_start,
+                        "end": new_end,
+                        "location": new_loc,
+                    })
+                else:
+                    st.write("- 새 일정 앞에 있는 다른 일정이 없습니다.")
+
+                if next_event:
+                    next_eval = describe_link("새 일정", "다음 일정", {
+                        "start": new_start,
+                        "end": new_end,
+                        "location": new_loc,
+                    }, next_event)
+                else:
+                    st.write("- 새 일정 뒤에 있는 다른 일정이 없습니다.")
+
+                # 5) 경유지 포함 경로 지도 (Google Maps)
+                st.markdown("#### 🗺 경유지 포함 이동 경로 지도")
+
+                key = get_maps_api_key()
+                if not key:
+                    st.caption("⚠ Google Maps API 키가 없어 경유지 지도를 표시할 수 없습니다.")
+                else:
+                    # 어느 조합이 가능한지에 따라 origin/dest/waypoints 설정
+                    origin_text = None
+                    dest_text = None
+                    waypoint_text = None
+
+                    if prev_event and prev_event.get("location") and next_event and next_event.get("location") and new_loc:
+                        origin_text = prev_event["location"]
+                        dest_text = next_event["location"]
+                        waypoint_text = new_loc
+                    elif prev_event and prev_event.get("location") and new_loc:
+                        origin_text = prev_event["location"]
+                        dest_text = new_loc
+                    elif next_event and next_event.get("location") and new_loc:
+                        origin_text = new_loc
+                        dest_text = next_event["location"]
+
+                    if origin_text and dest_text:
+                        o = urllib.parse.quote(origin_text)
+                        d = urllib.parse.quote(dest_text)
+
+                        # embed 모드 문자열
+                        embed_mode = "driving"
+                        if mode_value in ("walking", "bicycling", "transit"):
+                            embed_mode = mode_value
+
+                        if waypoint_text:
+                            w = urllib.parse.quote(waypoint_text)
+                            src = (
+                                "https://www.google.com/maps/embed/v1/directions"
+                                f"?key={key}&origin={o}&destination={d}"
+                                f"&mode={embed_mode}&waypoints={w}"
+                            )
+                        else:
+                            src = (
+                                "https://www.google.com/maps/embed/v1/directions"
+                                f"?key={key}&origin={o}&destination={d}"
+                                f"&mode={embed_mode}"
+                            )
+
                         iframe_html = f"""
                         <iframe
                             width="100%"
@@ -1252,42 +1305,15 @@ with st.container():
                         """
                         st.markdown(iframe_html, unsafe_allow_html=True)
                     else:
-                        st.caption("⚠ Google Maps API 키가 없어 대중교통 경로 지도를 표시할 수 없습니다.")
+                        st.caption("이전/다음 일정 또는 새 일정의 장소 정보가 부족해 경유지 지도를 그릴 수 없습니다.")
 
-                st.markdown("#### ⏱ 기준 일정 vs 새 일정 간 간격")
-
-                st.write(f"- 이번 비교에서 출발지는 **{origin_label}** 기준입니다.")
-
-                if travel_min is not None:
-                    st.write(f"- 예상 이동 시간: **약 {travel_min:.0f}분**")
-                else:
-                    st.write("- 이동 시간을 계산할 수 없습니다.")
-
-                if gap_min is not None:
-                    if gap_min < 0:
-                        st.write(
-                            f"- 기준 일정과 새 일정의 시간이 **약 {abs(gap_min):.0f}분 정도 실제로 겹쳐 있습니다.**"
-                        )
-                    else:
-                        st.write(
-                            f"- 선행 일정 종료 → 후행 일정 시작 사이 간격: **약 {gap_min:.0f}분**"
-                        )
-                elif is_same_day is False:
-                    st.write("- 서로 다른 날짜의 일정이라 시간상으로는 겹치지 않습니다.")
-                else:
-                    st.write("- 일정 간 간격을 계산할 수 없습니다.")
-
-                # ==== 하루 전체 일정 기준 안내 ====
-                st.markdown("#### 📋 하루 전체 일정 기준 안내")
-
-                ne = st.session_state.last_added_event
-                new_start_all = dt.datetime.combine(ne["date"], ne["start_time"])
-                new_end_all = dt.datetime.combine(ne["date"], ne["end_time"])
+                # 6) 하루 전체 일정 기준 종합 평가 + Google Calendar 반영 버튼
+                st.markdown("#### 📋 하루 전체 일정 기준 종합 평가 및 캘린더 저장")
 
                 new_ev_logic = {
-                    "start": new_start_all,
-                    "end": new_end_all,
-                    "location": ne.get("location", ""),
+                    "start": new_start,
+                    "end": new_end,
+                    "location": new_loc,
                     "source": "program",
                 }
 
@@ -1313,10 +1339,12 @@ with st.container():
                     except Exception:
                         continue
 
-                # 이미 추가된 커스텀 일정들
+                # 이미 추가된 커스텀 일정들 (last_added_event 제외)
                 for cev in st.session_state.custom_events:
                     s = dt.datetime.combine(cev["date"], cev["start_time"])
                     e = dt.datetime.combine(cev["date"], cev["end_time"])
+                    if cev is st.session_state.last_added_event:
+                        continue
                     existing_logic.append(
                         {
                             "start": s,
@@ -1337,4 +1365,49 @@ with st.container():
                 else:
                     st.success(eval_all["message"])
 
-    st.markdown("</div>", unsafe_allow_html=True)
+                # --- Google Calendar 저장 버튼들 ---
+                col_now, col_rec = st.columns(2)
+
+                # 6-1) 현재 시간 그대로 저장
+                with col_now:
+                    if st.button("📥 현재 시간 그대로 Google Calendar에 저장", key="save_now"):
+                        service, err = get_calendar_service()
+                        if err or not service:
+                            st.error(err or "Google Calendar service 생성 실패")
+                        else:
+                            ev_id = create_google_event_from_custom(service, ne)
+                            if ev_id:
+                                st.success("✅ 현재 시간 그대로 Google Calendar에 저장했습니다!")
+
+                # 6-2) 경고 + 추천 k분이 있는 경우: k분 뒤로 미룬 시간으로 저장
+                k = eval_all.get("k", 0) if eval_all.get("status") == "warn" else 0
+                if k and k > 0:
+                    # 미룬 시간 미리 계산해서 보여주기
+                    shift_delta = dt.timedelta(minutes=int(k))
+                    shifted_start_dt = new_start + shift_delta
+                    shifted_end_dt = new_end + shift_delta
+
+                    st.markdown(
+                        f"**추천:** 새 일정을 약 **{k:.0f}분 뒤**로 미루면 더 안전해요.  \n"
+                        f"→ 추천 시간: {shifted_start_dt.strftime('%Y-%m-%d %H:%M')} ~ "
+                        f"{shifted_end_dt.strftime('%H:%M')}"
+                    )
+
+                    with col_rec:
+                        if st.button("✨ 추천 시간으로 Google Calendar에 저장", key="save_recommended"):
+                            service, err = get_calendar_service()
+                            if err or not service:
+                                st.error(err or "Google Calendar service 생성 실패")
+                            else:
+                                shifted_event = ne.copy()
+                                shifted_event_start = shifted_start_dt
+                                shifted_event_end = shifted_end_dt
+                                shifted_event["date"] = shifted_event_start.date()
+                                shifted_event["start_time"] = shifted_event_start.time()
+                                shifted_event["end_time"] = shifted_event_end.time()
+
+                                ev_id = create_google_event_from_custom(service, shifted_event)
+                                if ev_id:
+                                    st.success("✅ 추천 시간으로 Google Calendar에 저장했습니다!")
+
+        st.markdown("</div>", unsafe_allow_html=True)
