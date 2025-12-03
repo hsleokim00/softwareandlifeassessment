@@ -1251,34 +1251,63 @@ with st.container():
     else:
         st.write("- 다음 일정 없음")
 
-    # ---------------------------------------------------------
-    # 경유지 포함 Google 지도 표시
+       # ---------------------------------------------------------
+    # 경유지 포함 Google 지도 표시 (Embed API 사용: 경로선 확실히 보이게)
     # ---------------------------------------------------------
     st.markdown("#### 🗺 경유지 포함 이동 경로 지도")
 
     key = get_maps_api_key()
     if key:
         origin = dest = waypoint = None
-        if prev_event and next_event:
+
+        # 이전 + 새 + 다음 모두 있는 경우: 이전 → (새) → 다음
+        if prev_event and next_event and new_loc:
             origin = prev_event["location"]
             dest = next_event["location"]
             waypoint = new_loc
-        elif prev_event:
+        # 이전만 있는 경우: 이전 → 새
+        elif prev_event and new_loc:
             origin = prev_event["location"]
             dest = new_loc
-        elif next_event:
+        # 다음만 있는 경우: 새 → 다음
+        elif next_event and new_loc:
             origin = new_loc
             dest = next_event["location"]
 
         if origin and dest:
-            render_google_route_map_with_waypoints(
-                api_key=key,
-                origin=origin,
-                destination=dest,
-                waypoint=waypoint,
-                mode=mode_value,
-                height=420
-            )
+            o = urllib.parse.quote(origin)
+            d = urllib.parse.quote(dest)
+
+            # embed용 mode
+            embed_mode = "driving"
+            if mode_value in ("walking", "bicycling", "transit"):
+                embed_mode = mode_value
+
+            if waypoint:
+                w = urllib.parse.quote(waypoint)
+                src = (
+                    "https://www.google.com/maps/embed/v1/directions"
+                    f"?key={key}&origin={o}&destination={d}"
+                    f"&mode={embed_mode}&waypoints={w}"
+                )
+            else:
+                src = (
+                    "https://www.google.com/maps/embed/v1/directions"
+                    f"?key={key}&origin={o}&destination={d}"
+                    f"&mode={embed_mode}"
+                )
+
+            iframe_html = f"""
+            <iframe
+                width="100%"
+                height="420"
+                style="border:0; border-radius: 14px;"
+                loading="lazy"
+                referrerpolicy="no-referrer-when-downgrade"
+                src="{src}">
+            </iframe>
+            """
+            st.markdown(iframe_html, unsafe_allow_html=True)
         else:
             st.caption("경로를 표시할 수 없습니다. (장소 정보 부족)")
     else:
